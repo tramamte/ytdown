@@ -1,12 +1,11 @@
-#[allow(dead_code)] // consumed by download flow in Task 6
+#[allow(dead_code)] // commands registered in Task 7
+mod download;
 mod args;
 #[allow(dead_code)] // consumed by commands in Task 7
 mod settings;
 #[allow(dead_code)] // consumed by download flow (Task 6) and commands (Task 7)
 mod deps;
-#[allow(dead_code)] // consumed by download flow in Task 6
 mod progress;
-#[allow(dead_code)] // consumed by download flow in Task 6
 mod url;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

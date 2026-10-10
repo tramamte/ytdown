@@ -1,6 +1,6 @@
 use url::Url;
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy, serde::Serialize)]
 pub enum UrlKind { Video, Playlist, Invalid }
 
 pub fn classify(input: &str) -> UrlKind {
