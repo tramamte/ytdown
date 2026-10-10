@@ -9,6 +9,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::AsyncWriteExt;
+use tokio_util::sync::CancellationToken;
 
 const YTDLP_BASE: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/";
 const YTDLP_API: &str = "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest";
@@ -425,14 +426,23 @@ async fn ensure(app: &AppHandle, probe: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// RUNNING, or None if `tok` is cancelled while waiting for it.
+async fn lock_unless(tok: &CancellationToken) -> Option<tokio::sync::MutexGuard<'static, ()>> {
+    tokio::select! {
+        g = RUNNING.lock() => Some(g),
+        _ = tok.cancelled() => None,
+    }
+}
+
 /// Download time: probes ffmpeg and deno (fast) and reinstalls a broken one.
-pub async fn repair_fast_tools(app: &AppHandle) -> Result<(), String> {
+/// Returns Ok early if `tok` is cancelled while waiting to install; the caller checks it.
+pub async fn repair_fast_tools(app: &AppHandle, tok: &CancellationToken) -> Result<(), String> {
     for (name, path, arg, source) in [
         ("ffmpeg", ffmpeg_path(app), "-version", ffmpeg_source as fn() -> Result<Source, String>),
         ("deno", deno_path(app), "--version", deno_source),
     ] {
         if runs_ok(&path, arg).await { continue; }
-        let _guard = RUNNING.lock().await;
+        let Some(_guard) = lock_unless(tok).await else { return Ok(()) };
         // a concurrent job may have repaired it while we waited
         if !runs_ok(&path, arg).await {
             reinstall(app, name, source()?, &path).await?;
@@ -448,9 +458,10 @@ pub fn stamp(path: &Path) -> Option<(SystemTime, u64)> {
 }
 
 /// Reinstalls a yt-dlp that failed to start, unless it was replaced since `seen` (another job,
-/// the background check or Update already did it).
-pub async fn repair_ytdlp_since(app: &AppHandle, seen: Option<(SystemTime, u64)>) -> Result<(), String> {
-    let _guard = RUNNING.lock().await;
+/// the background check or Update already did it). Returns Ok early if `tok` is cancelled
+/// while waiting to install; the caller checks it.
+pub async fn repair_ytdlp_since(app: &AppHandle, tok: &CancellationToken, seen: Option<(SystemTime, u64)>) -> Result<(), String> {
+    let Some(_guard) = lock_unless(tok).await else { return Ok(()) };
     let path = ytdlp_path(app);
     if stamp(&path) != seen { return Ok(()); }
     reinstall(app, "yt-dlp", ytdlp_source(YTDLP_BASE)?, &path).await
@@ -581,6 +592,16 @@ mod tests {
         assert!(looks_installed(&bin));
         assert!(!looks_installed(&dir)); // directory
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn lock_wait_is_cancellable() {
+        let tok = CancellationToken::new();
+        let held = RUNNING.lock().await;
+        tok.cancel();
+        assert!(lock_unless(&tok).await.is_none());
+        drop(held);
+        assert!(lock_unless(&CancellationToken::new()).await.is_some());
     }
 
     #[test]
