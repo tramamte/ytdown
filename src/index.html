@@ -83,9 +83,26 @@
           <option>2160</option><option>1440</option><option>1080</option>
           <option>720</option><option>480</option><option>360</option>
         </select>
+        <h3>Audio track</h3>
+        <label for="s-vacodec">Codec</label>
+        <select id="s-vacodec">
+          <option value="auto">Auto (best available)</option><option value="aac">AAC (most compatible)</option>
+          <option value="opus">Opus</option>
+        </select>
+        <label for="s-vabitrate">Max bitrate</label>
+        <select id="s-vabitrate">
+          <option value="best">Best</option><option value="160k">160 kbps</option>
+          <option value="128k">128 kbps</option><option value="64k">64 kbps</option>
+        </select>
+        <label for="s-varecode">Re-encode</label>
+        <select id="s-varecode">
+          <option value="off">Off (keep original)</option><option value="aac">AAC</option>
+          <option value="mp3">MP3</option><option value="opus">Opus</option>
+        </select>
+        <p class="about">Slower; needs MP4 or MKV</p>
       </fieldset>
       <fieldset>
-        <legend>Audio</legend>
+        <legend>Audio only</legend>
         <label for="s-audio">Format</label>
         <select id="s-audio">
           <option value="original">Original (no conversion)</option>

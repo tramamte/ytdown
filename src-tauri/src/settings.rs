@@ -13,16 +13,26 @@ pub struct Settings {
     pub video_codec: String,  // auto | h264 | vp9 | av1
     #[serde(default = "default_audio_quality")]
     pub audio_quality: String, // best | 320k | 192k | 128k
+    // audio track of video downloads (audio_format/audio_quality are audio-only)
+    #[serde(default = "default_codec")]
+    pub video_audio_codec: String,   // auto | aac | opus
+    #[serde(default = "default_audio_quality")]
+    pub video_audio_bitrate: String, // best | 160k | 128k | 64k
+    #[serde(default = "default_recode")]
+    pub video_audio_recode: String,  // off | aac | mp3 | opus
 }
 
 fn default_codec() -> String { "auto".into() }
 fn default_audio_quality() -> String { "best".into() }
+fn default_recode() -> String { "off".into() }
 
 impl Settings {
     pub fn new(download_dir: PathBuf) -> Self {
         Self { download_dir, quality: None, container: "original".into(),
                audio_format: "original".into(), shortcut: "Control+Alt+Y".into(),
-               video_codec: default_codec(), audio_quality: default_audio_quality() }
+               video_codec: default_codec(), audio_quality: default_audio_quality(),
+               video_audio_codec: default_codec(), video_audio_bitrate: default_audio_quality(),
+               video_audio_recode: default_recode() }
     }
 }
 
@@ -54,6 +64,18 @@ pub fn validate(s: &Settings) -> Result<(), String> {
     }
     if !["best", "320k", "192k", "128k"].contains(&s.audio_quality.as_str()) {
         return Err(format!("audio_quality: unsupported value {:?}", s.audio_quality));
+    }
+    if !["auto", "aac", "opus"].contains(&s.video_audio_codec.as_str()) {
+        return Err(format!("video_audio_codec: unsupported value {:?}", s.video_audio_codec));
+    }
+    if !["best", "160k", "128k", "64k"].contains(&s.video_audio_bitrate.as_str()) {
+        return Err(format!("video_audio_bitrate: unsupported value {:?}", s.video_audio_bitrate));
+    }
+    if !["off", "aac", "mp3", "opus"].contains(&s.video_audio_recode.as_str()) {
+        return Err(format!("video_audio_recode: unsupported value {:?}", s.video_audio_recode));
+    }
+    if s.video_audio_recode != "off" && !["mp4", "mkv"].contains(&s.container.as_str()) {
+        return Err("video_audio_recode: choose MP4 or MKV to re-encode the audio track".into());
     }
     if !matches!(s.quality, None | Some(2160 | 1440 | 1080 | 720 | 480 | 360)) {
         return Err("quality: unsupported value".into());
@@ -107,6 +129,24 @@ mod tests {
     #[test]
     fn valid_quality() {
         assert!(validate(&Settings { quality: Some(1080), ..ok() }).is_ok());
+    }
+
+    #[test]
+    fn video_audio_fields() {
+        let s: Settings = serde_json::from_str(
+            r#"{"download_dir":"/dl","quality":null,"container":"mp4","audio_format":"mp3","shortcut":"X"}"#).unwrap();
+        assert_eq!((s.video_audio_codec.as_str(), s.video_audio_bitrate.as_str(), s.video_audio_recode.as_str()),
+                   ("auto", "best", "off"));
+        err(Settings { video_audio_codec: "mp3".into(), ..ok() }, "video_audio_codec");
+        err(Settings { video_audio_bitrate: "320k".into(), ..ok() }, "video_audio_bitrate");
+        err(Settings { video_audio_recode: "flac".into(), ..ok() }, "video_audio_recode");
+        for c in ["webm", "original"] {
+            let e = validate(&Settings { container: c.into(), video_audio_recode: "aac".into(), ..ok() }).unwrap_err();
+            assert_eq!(e, "video_audio_recode: choose MP4 or MKV to re-encode the audio track");
+        }
+        for c in ["mp4", "mkv"] {
+            assert!(validate(&Settings { container: c.into(), video_audio_recode: "mp3".into(), ..ok() }).is_ok());
+        }
     }
 
     #[test]

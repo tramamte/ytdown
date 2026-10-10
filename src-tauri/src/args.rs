@@ -29,18 +29,38 @@ pub fn build(kind: Kind, url: &str, playlist: bool, s: &Settings, ffmpeg: &Path,
     ];
     match kind {
         Kind::Video => {
-            let f = match s.quality {
-                None => "bv*+ba/b".to_string(),
-                Some(h) => format!("bv*[height<={h}]+ba/b[height<={h}]"),
+            let (v, b) = match s.quality {
+                None => ("bv*".to_string(), "b".to_string()),
+                Some(h) => (format!("bv*[height<={h}]"), format!("b[height<={h}]")),
+            };
+            // capped audio falls back to any audio so a video never fails for lack of a low-bitrate stream
+            let f = match s.video_audio_bitrate.trim_end_matches('k') {
+                "best" => format!("{v}+ba/{b}"),
+                n => format!("{v}+ba[abr<={n}]/{v}+ba/{b}"),
             };
             a.extend(["-f".into(), f]);
             // "original": let yt-dlp pick a compatible container (no forced remux)
             if s.container != "original" {
                 a.extend(["--merge-output-format".into(), s.container.clone()]);
             }
+            // one comma-joined -S: repeated -S flags are prepended, reversing the priority
+            let mut sort = Vec::new();
             if s.video_codec != "auto" {
-                let tok = if s.video_codec == "av1" { "av01" } else { s.video_codec.as_str() };
-                a.extend(["-S".into(), format!("vcodec:{tok}")]);
+                sort.push(format!("vcodec:{}", if s.video_codec == "av1" { "av01" } else { s.video_codec.as_str() }));
+            }
+            if s.video_audio_codec != "auto" {
+                sort.push(format!("acodec:{}", s.video_audio_codec));
+            }
+            if !sort.is_empty() {
+                a.extend(["-S".into(), sort.join(",")]);
+            }
+            // Merger runs `ffmpeg -i v -i a -c copy -map 0:v:0 -map 1:a:0 ... <ffmpeg_o args> out`;
+            // a later -c:a overrides the -c copy for audio only, so video stays copied.
+            // Only applies when two streams are merged (not to a single pre-muxed "b" fallback).
+            if s.video_audio_recode != "off" {
+                let enc = match s.video_audio_recode.as_str() { "mp3" => "libmp3lame", "opus" => "libopus", c => c };
+                let rate = if s.video_audio_bitrate == "best" { "256k" } else { s.video_audio_bitrate.as_str() };
+                a.extend(["--postprocessor-args".into(), format!("Merger+ffmpeg_o:-c:a {enc} -b:a {rate}")]);
             }
         }
         Kind::Audio => {
@@ -126,5 +146,31 @@ mod tests {
         st.audio_format = "flac".into();
         assert!(!b(Kind::Audio, &st).contains(&"--audio-quality".to_string()));
         assert!(has_pair(&b(Kind::Audio, &s()), ["--audio-quality", "0"]));
+    }
+    #[test]
+    fn video_audio_track() {
+        let b = |k, st: &Settings| build(k, "u", false, st, Path::new("/ff"), Path::new("/deno"), Path::new("/t"));
+        let mut st = s(); st.video_audio_bitrate = "128k".into();
+        assert!(has_pair(&b(Kind::Video, &st), ["-f", "bv*+ba[abr<=128]/bv*+ba/b"]));
+        st.quality = Some(1080);
+        assert!(has_pair(&b(Kind::Video, &st), ["-f", "bv*[height<=1080]+ba[abr<=128]/bv*[height<=1080]+ba/b[height<=1080]"]));
+        // codec: one comma-joined -S (repeated -S reverses priority in yt-dlp)
+        let mut st = s(); st.video_audio_codec = "aac".into();
+        assert!(has_pair(&b(Kind::Video, &st), ["-S", "acodec:aac"]));
+        st.video_codec = "h264".into(); st.video_audio_codec = "opus".into();
+        let a = b(Kind::Video, &st);
+        assert!(has_pair(&a, ["-S", "vcodec:h264,acodec:opus"]));
+        assert_eq!(a.iter().filter(|x| *x == "-S").count(), 1);
+        assert!(!a.contains(&"--postprocessor-args".to_string()));
+        // re-encode
+        let mut st = s(); st.video_audio_recode = "mp3".into(); st.video_audio_bitrate = "128k".into();
+        assert!(has_pair(&b(Kind::Video, &st), ["--postprocessor-args", "Merger+ffmpeg_o:-c:a libmp3lame -b:a 128k"]));
+        st.video_audio_recode = "opus".into(); st.video_audio_bitrate = "best".into();
+        assert!(has_pair(&b(Kind::Video, &st), ["--postprocessor-args", "Merger+ffmpeg_o:-c:a libopus -b:a 256k"]));
+        st.video_audio_recode = "aac".into(); st.video_audio_bitrate = "64k".into();
+        assert!(has_pair(&b(Kind::Video, &st), ["--postprocessor-args", "Merger+ffmpeg_o:-c:a aac -b:a 64k"]));
+        // audio-only downloads ignore the video audio-track settings
+        let a = b(Kind::Audio, &st);
+        assert!(!a.contains(&"--postprocessor-args".to_string()) && !a.contains(&"-S".to_string()));
     }
 }

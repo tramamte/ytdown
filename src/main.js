@@ -123,6 +123,9 @@ const fill = (s) => {
   $("#s-audio").value = s.audio_format;
   $("#s-codec").value = s.video_codec;
   $("#s-aq").value = s.audio_quality;
+  $("#s-vacodec").value = s.video_audio_codec;
+  $("#s-vabitrate").value = s.video_audio_bitrate;
+  $("#s-varecode").value = s.video_audio_recode;
   syncAq();
   setShortcutField(s.shortcut);
 };
@@ -178,7 +181,9 @@ $("#settings-form").addEventListener("submit", async (e) => {
   const q = $("#s-quality").value;
   const s = { ...current, download_dir: $("#s-dir").value, quality: q ? Number(q) : null,
     container: $("#s-container").value, audio_format: $("#s-audio").value,
-    video_codec: $("#s-codec").value, audio_quality: $("#s-aq").value };
+    video_codec: $("#s-codec").value, audio_quality: $("#s-aq").value,
+    video_audio_codec: $("#s-vacodec").value, video_audio_bitrate: $("#s-vabitrate").value,
+    video_audio_recode: $("#s-varecode").value };
   try {
     await invoke("save_settings", { s });
     const accel = $("#s-shortcut").dataset.accel || "";
