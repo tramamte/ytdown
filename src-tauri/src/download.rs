@@ -26,6 +26,15 @@ impl Manager {
     pub fn new() -> Self {
         Self { sem: Arc::new(Semaphore::new(3)), jobs: Default::default(), next: AtomicU64::new(1) }
     }
+
+    fn active(&self) -> bool {
+        !self.jobs.lock().unwrap().is_empty()
+    }
+}
+
+/// Any download queued or running.
+pub fn has_active_jobs(app: &AppHandle) -> bool {
+    app.state::<Manager>().active()
 }
 
 #[derive(Serialize, Clone)]
@@ -135,12 +144,12 @@ const BROKEN: &str = "yt-dlp could not be started. Use Settings → Update to re
 /// Runs yt-dlp once. None = it never started (see `never_started`).
 async fn run(app: &AppHandle, tok: &CancellationToken, ev: &mut Update, a: &[String]) -> Option<(&'static str, String)> {
     let mut cmd = deps::command(&deps::ytdlp_path(app));
-    // own process group so cancel reaches the PyInstaller launcher's real yt-dlp child (and ffmpeg)
+    // own process group so cancel reaches everything yt-dlp started (ffmpeg)
     #[cfg(unix)]
     cmd.process_group(0);
     let mut child = match cmd.args(a)
         .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped())
-        .kill_on_drop(true).spawn() { // kill_on_drop: last-resort fallback (launcher only)
+        .kill_on_drop(true).spawn() { // kill_on_drop: last-resort fallback (direct child only)
         Ok(c) => c,
         Err(e) => {
             log::warn!("Failed to start yt-dlp: {e}");
@@ -228,7 +237,7 @@ fn own_line(l: &str) -> bool {
 }
 
 /// Kills `child` and all its descendants, then reaps it.
-/// Unix: SIGTERM the group first so the PyInstaller bootloader can remove its `_MEI*` dir.
+/// Unix: SIGTERM the group first so yt-dlp and ffmpeg can clean up.
 async fn kill_tree(child: &mut tokio::process::Child) {
     let Some(pid) = child.id() else { return }; // already reaped
     #[cfg(unix)]
@@ -279,6 +288,16 @@ mod tests {
         let p: Vec<_> = futures_util::future::join_all((0..3).map(|_| m.sem.clone().acquire_owned())).await;
         assert_eq!(p.len(), 3);
         assert!(m.sem.clone().try_acquire_owned().is_err());
+    }
+
+    #[test]
+    fn tracks_active_jobs() {
+        let m = Manager::new();
+        assert!(!m.active());
+        m.jobs.lock().unwrap().insert(1, CancellationToken::new()); // queued or running
+        assert!(m.active());
+        m.jobs.lock().unwrap().remove(&1);
+        assert!(!m.active());
     }
 
     #[cfg(unix)]

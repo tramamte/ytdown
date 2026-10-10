@@ -198,13 +198,29 @@ fn extract_dir(archive: &Path, out: &Path, exe: &str) -> Result<(), String> {
 
 /// Removes a file or directory tree, if present.
 fn remove_any(p: &Path) {
-    let _ = if p.is_dir() { std::fs::remove_dir_all(p) } else { std::fs::remove_file(p) };
+    let _ = match p.symlink_metadata() {
+        Ok(m) if m.is_dir() => std::fs::remove_dir_all(p),
+        Ok(_) => std::fs::remove_file(p),
+        Err(_) => return,
+    };
+}
+
+/// Where `replace` parks the current `dest` during a swap.
+fn old_path(dest: &Path) -> PathBuf {
+    dest.with_file_name(format!("{}.old", dest.file_name().expect("file name").to_string_lossy()))
+}
+
+/// Puts back a `dest` that a swap interrupted by a crash left only as `<dest>.old`.
+fn recover(dest: &Path) {
+    if dest.symlink_metadata().is_err() && old_path(dest).symlink_metadata().is_ok() {
+        let _ = std::fs::rename(old_path(dest), dest);
+    }
 }
 
 /// Swaps `new` in at `dest` (a file, a directory, or absent) via `<dest>.old`.
 /// On failure `new` stays where it is and `dest` is restored.
 fn replace(new: &Path, dest: &Path) -> std::io::Result<()> {
-    let old = dest.with_file_name(format!("{}.old", dest.file_name().expect("file name").to_string_lossy()));
+    let old = old_path(dest);
     remove_any(&old); // leftover of a crashed run
     let had = dest.symlink_metadata().is_ok();
     if had { std::fs::rename(dest, &old)?; }
@@ -372,6 +388,7 @@ fn spawn_update_check(app: &AppHandle) {
 /// Reinstalls a yt-dlp that does not run. Skipped if an install/update holds RUNNING.
 async fn repair_ytdlp(app: &AppHandle) {
     let Ok(_guard) = RUNNING.try_lock() else { return };
+    // Swapping under running jobs is fine here: yt-dlp is broken, so they are failing anyway.
     log::warn!("yt-dlp does not run; reinstalling");
     emit(app, "working", "Downloading yt-dlp…");
     match async { install("yt-dlp", ytdlp_source(YTDLP_BASE)?, &ytdlp_path(app)).await }.await {
@@ -427,13 +444,22 @@ async fn update(app: &AppHandle) -> Result<(), String> {
         None => Err("yt-dlp does not run".into()),
     };
     match staged {
-        Ok((v, true)) => match promote_pending(&ytdlp_dir(app)) {
-            Ok(()) => emit(app, "update", &format!("yt-dlp updated to {v}.")),
-            Err(e) => {
-                log::warn!("Could not replace yt-dlp now: {e}");
-                emit(app, "update", &format!("yt-dlp {v} downloaded; it will be applied the next time you start ytdown."));
+        Ok((v, true)) => {
+            // R34: a running onedir yt-dlp loads files from its directory on demand; never swap it
+            // under a queued or running job, stage it for the next launch instead.
+            let swapped = if crate::download::has_active_jobs(app) {
+                Err(std::io::Error::other("downloads are active"))
+            } else {
+                promote_pending(&ytdlp_dir(app))
+            };
+            match swapped {
+                Ok(()) => emit(app, "update", &format!("yt-dlp updated to {v}.")),
+                Err(e) => {
+                    log::warn!("Could not replace yt-dlp now: {e}");
+                    emit(app, "update", &format!("yt-dlp {v} downloaded; it will be applied the next time you start ytdown."));
+                }
             }
-        },
+        }
         Ok((v, false)) => {
             // A leftover staged build is not newer; drop it so next launch can't downgrade.
             remove_any(&pending_path(&ytdlp_dir(app)));
@@ -454,7 +480,9 @@ async fn ensure(app: &AppHandle, probe: bool) -> Result<(), String> {
     std::fs::create_dir_all(bin_dir(app)).map_err(|e| e.to_string())?;
     // Only on the first call (launch): later calls must not swap a binary that may be running.
     if !APPLIED.swap(true, Ordering::SeqCst) {
-        apply_pending(&ytdlp_dir(app));
+        let ytdlp = ytdlp_dir(app);
+        for p in [&ytdlp, &pending_path(&ytdlp), &ffmpeg_path(app), &deno_path(app)] { recover(p); }
+        apply_pending(&ytdlp);
     }
     for (name, path, arg, source) in [
         ("yt-dlp", ytdlp_path(app), "--version", (|| ytdlp_source(YTDLP_BASE)) as fn() -> Result<Source, String>),
@@ -506,6 +534,7 @@ pub fn stamp(path: &Path) -> Option<(SystemTime, u64)> {
 /// while waiting to install; the caller checks it.
 pub async fn repair_ytdlp_since(app: &AppHandle, tok: &CancellationToken, seen: Option<(SystemTime, u64)>) -> Result<(), String> {
     let Some(_guard) = lock_unless(tok).await else { return Ok(()) };
+    // Swapping under other running jobs is fine here: this yt-dlp is broken, so they fail too.
     let path = ytdlp_path(app);
     if stamp(&path) != seen { return Ok(()); }
     reinstall(app, "yt-dlp", ytdlp_source(YTDLP_BASE)?, &path).await
@@ -664,6 +693,33 @@ mod tests {
         let mut left: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
         left.sort();
         assert_eq!(left, ["yt-dlp"]); // no .part / .old
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn recovers_interrupted_swap() {
+        let dir = std::env::temp_dir().join(format!("ytdown-recover-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("yt-dlp");
+        recover(&bin); // nothing to do
+        assert!(!bin.exists());
+        onedir(&old_path(&bin), "old"); // crash between the two renames
+        recover(&bin);
+        assert_eq!(exe_of(&bin), "old");
+        assert!(!old_path(&bin).exists());
+        onedir(&old_path(&bin), "older"); // dest present: leave it, the next swap drops .old
+        recover(&bin);
+        assert_eq!(exe_of(&bin), "old");
+        // remove_any never follows a symlink to a directory
+        #[cfg(unix)]
+        {
+            let link = dir.join("link");
+            std::os::unix::fs::symlink(&bin, &link).unwrap();
+            remove_any(&link);
+            assert!(link.symlink_metadata().is_err());
+            assert_eq!(exe_of(&bin), "old");
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
