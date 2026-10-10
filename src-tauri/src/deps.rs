@@ -1,0 +1,311 @@
+use futures_util::StreamExt;
+use serde::Serialize;
+use sha2::{Digest, Sha256};
+use std::env::consts::{ARCH, EXE_SUFFIX, OS};
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use tauri::{AppHandle, Emitter, Manager};
+use tokio::io::AsyncWriteExt;
+
+const YTDLP_BASE: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/";
+const DENO_BASE: &str = "https://github.com/denoland/deno/releases/latest/download/";
+const BTBN_BASE: &str = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/";
+const UNSUPPORTED: &str = "Unsupported platform";
+
+pub fn bin_dir(app: &AppHandle) -> PathBuf {
+    app.path().app_data_dir().expect("app data dir").join("bin")
+}
+pub fn ytdlp_path(app: &AppHandle) -> PathBuf { bin_dir(app).join(format!("yt-dlp{EXE_SUFFIX}")) }
+pub fn ffmpeg_path(app: &AppHandle) -> PathBuf { bin_dir(app).join(format!("ffmpeg{EXE_SUFFIX}")) }
+pub fn deno_path(app: &AppHandle) -> PathBuf { bin_dir(app).join(format!("deno{EXE_SUFFIX}")) }
+
+/// Child process with no console window on Windows. Use for every spawned binary.
+pub fn command(path: &Path) -> tokio::process::Command {
+    #[allow(unused_mut)]
+    let mut cmd = tokio::process::Command::new(path);
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    cmd
+}
+
+pub fn verify_sha256(bytes: &[u8], expected_hex: &str) -> bool {
+    hex_eq(&hex::encode(Sha256::digest(bytes)), expected_hex)
+}
+
+fn hex_eq(actual: &str, expected: &str) -> bool {
+    actual.eq_ignore_ascii_case(expected.trim())
+}
+
+/// Hash for `asset` in a sha256sum-style body (`<hash>  <name>` per line).
+fn find_hash(body: &str, asset: &str) -> Option<String> {
+    body.lines().find_map(|l| {
+        let mut it = l.split_whitespace();
+        let hash = it.next()?;
+        (it.next()?.trim_start_matches('*') == asset).then(|| hash.to_string())
+    })
+}
+
+fn first_token(body: &str) -> Option<String> {
+    body.split_whitespace().next().map(str::to_string)
+}
+
+/// How to verify a download.
+enum Check {
+    /// Archive hash listed in a sums file under `asset`.
+    Listed { sums_url: String, asset: String },
+    /// Archive hash is the first token of this file.
+    SumFile(String),
+    /// Pinned hash of the extracted binary.
+    Binary(&'static str),
+}
+
+struct Source {
+    url: String,
+    check: Check,
+    /// Archive entry to extract; None = the download is the binary itself.
+    entry: Option<String>,
+}
+
+fn ytdlp_source() -> Result<Source, String> {
+    let asset = match (OS, ARCH) {
+        ("macos", _) => "yt-dlp_macos",
+        ("windows", "x86_64") => "yt-dlp.exe",
+        ("linux", "x86_64") => "yt-dlp_linux",
+        _ => return Err(UNSUPPORTED.into()),
+    };
+    Ok(Source {
+        url: format!("{YTDLP_BASE}{asset}"),
+        check: Check::Listed { sums_url: format!("{YTDLP_BASE}SHA2-256SUMS"), asset: asset.into() },
+        entry: None,
+    })
+}
+
+fn deno_source() -> Result<Source, String> {
+    let triple = match (OS, ARCH) {
+        ("macos", "aarch64") => "aarch64-apple-darwin",
+        ("macos", "x86_64") => "x86_64-apple-darwin",
+        ("windows", "x86_64") => "x86_64-pc-windows-msvc",
+        ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
+        _ => return Err(UNSUPPORTED.into()),
+    };
+    let url = format!("{DENO_BASE}deno-{triple}.zip");
+    Ok(Source { check: Check::SumFile(format!("{url}.sha256sum")), url, entry: Some(format!("deno{EXE_SUFFIX}")) })
+}
+
+fn ffmpeg_source() -> Result<Source, String> {
+    // ponytail: pinned single-maintainer macOS build (osxexperts.net, no checksum file);
+    // bump URL + hash when it changes.
+    let mac = |url: &str, hash| Source { url: url.into(), check: Check::Binary(hash), entry: Some("ffmpeg".into()) };
+    let btbn = |name: &str, ext: &str, bin: &str| Source {
+        url: format!("{BTBN_BASE}{name}{ext}"),
+        check: Check::Listed { sums_url: format!("{BTBN_BASE}checksums.sha256"), asset: format!("{name}{ext}") },
+        entry: Some(format!("{name}/bin/{bin}")),
+    };
+    Ok(match (OS, ARCH) {
+        ("macos", "aarch64") => mac("https://www.osxexperts.net/ffmpeg9arm.zip",
+            "591260c945d0eef150e3bf82b0ef988bd36a9cecc18ff05d6679617159f0a95e"),
+        ("macos", "x86_64") => mac("https://www.osxexperts.net/ffmpeg80intel.zip",
+            "df3f1e3facdc1ae0ad0bd898cdfb072fbc9641bf47b11f172844525a05db8d11"),
+        ("windows", "x86_64") => btbn("ffmpeg-master-latest-win64-gpl", ".zip", "ffmpeg.exe"),
+        ("linux", "x86_64") => btbn("ffmpeg-master-latest-linux64-gpl", ".tar.xz", "ffmpeg"),
+        _ => return Err(UNSUPPORTED.into()),
+    })
+}
+
+async fn fetch(url: &str) -> Result<reqwest::Response, String> {
+    reqwest::get(url).await.and_then(|r| r.error_for_status()).map_err(|e| format!("Download failed: {e}"))
+}
+
+async fn fetch_text(url: &str) -> Result<String, String> {
+    fetch(url).await?.text().await.map_err(|e| format!("Download failed: {e}"))
+}
+
+/// Streams `url` to `dest`, returning the sha256 hex of the body.
+async fn download(url: &str, dest: &Path) -> Result<String, String> {
+    let mut stream = fetch(url).await?.bytes_stream();
+    let mut file = tokio::fs::File::create(dest).await.map_err(|e| e.to_string())?;
+    let mut hasher = Sha256::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("Download failed: {e}"))?;
+        hasher.update(&chunk);
+        file.write_all(&chunk).await.map_err(|e| e.to_string())?;
+    }
+    file.flush().await.map_err(|e| e.to_string())?;
+    Ok(hex::encode(hasher.finalize()))
+}
+
+fn sha256_file(path: &Path) -> std::io::Result<String> {
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 1 << 16];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 { return Ok(hex::encode(hasher.finalize())); }
+        hasher.update(&buf[..n]);
+    }
+}
+
+/// Extracts `entry` from a zip or tar.xz `archive` into `out`.
+fn extract(archive: &Path, tar_xz: bool, entry: &str, out: &Path) -> Result<(), String> {
+    let err = |e: &dyn std::fmt::Display| format!("Extract failed: {e}");
+    let file = std::fs::File::open(archive).map_err(|e| err(&e))?;
+    let mut dest = std::fs::File::create(out).map_err(|e| err(&e))?;
+    if tar_xz {
+        let mut tar = tar::Archive::new(xz2::read::XzDecoder::new(file));
+        for e in tar.entries().map_err(|e| err(&e))? {
+            let mut e = e.map_err(|e| err(&e))?;
+            if e.path().map_err(|e| err(&e))? == Path::new(entry) {
+                std::io::copy(&mut e, &mut dest).map_err(|e| err(&e))?;
+                return Ok(());
+            }
+        }
+        Err(format!("{entry} not found in archive"))
+    } else {
+        let mut zip = zip::ZipArchive::new(file).map_err(|e| err(&e))?;
+        let mut e = zip.by_name(entry).map_err(|e| err(&e))?;
+        std::io::copy(&mut e, &mut dest).map_err(|e| err(&e))?;
+        Ok(())
+    }
+}
+
+/// Downloads, verifies and installs `src` at `dest`. Temp files are removed on every path.
+async fn install(name: &str, src: Source, dest: &Path) -> Result<(), String> {
+    let archive = dest.with_file_name(format!("{name}.download"));
+    let part = dest.with_file_name(format!("{name}.part"));
+    let result = install_inner(name, &src, &archive, &part, dest).await;
+    let _ = std::fs::remove_file(&archive);
+    let _ = std::fs::remove_file(&part);
+    result
+}
+
+async fn install_inner(name: &str, src: &Source, archive: &Path, part: &Path, dest: &Path) -> Result<(), String> {
+    let mismatch = || format!("Checksum mismatch for {name}");
+    let expected = match &src.check {
+        Check::Listed { sums_url, asset } => find_hash(&fetch_text(sums_url).await?, asset),
+        Check::SumFile(url) => first_token(&fetch_text(url).await?),
+        Check::Binary(_) => None,
+    };
+    if !matches!(src.check, Check::Binary(_)) && expected.is_none() {
+        return Err(format!("No checksum published for {name}"));
+    }
+    let got = download(&src.url, archive).await?;
+    if expected.is_some_and(|h| !hex_eq(&got, &h)) {
+        return Err(mismatch());
+    }
+    match &src.entry {
+        Some(entry) => {
+            let (a, e, p) = (archive.to_owned(), entry.clone(), part.to_owned());
+            let tar_xz = src.url.ends_with(".tar.xz");
+            tokio::task::spawn_blocking(move || extract(&a, tar_xz, &e, &p)).await.map_err(|e| e.to_string())??;
+        }
+        None => std::fs::rename(archive, part).map_err(|e| e.to_string())?,
+    }
+    if let Check::Binary(hash) = src.check {
+        let p = part.to_owned();
+        let got = tokio::task::spawn_blocking(move || sha256_file(&p)).await.map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+        if !hex_eq(&got, hash) { return Err(mismatch()); }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(part, std::fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
+    }
+    std::fs::rename(part, dest).map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("xattr").args(["-d", "com.apple.quarantine"]).arg(dest).output();
+    Ok(())
+}
+
+async fn runs_ok(path: &Path, arg: &str) -> bool {
+    path.exists() && command(path).arg(arg).output().await.is_ok_and(|o| o.status.success())
+}
+
+async fn self_update(ytdlp: &Path) -> bool {
+    command(ytdlp).arg("-U").output().await.is_ok_and(|o| {
+        o.status.success() && !String::from_utf8_lossy(&[o.stdout, o.stderr].concat()).contains("ERROR")
+    })
+}
+
+#[derive(Serialize, Clone)]
+struct Status<'a> {
+    state: &'a str,
+    message: &'a str,
+}
+
+fn emit(app: &AppHandle, state: &str, message: &str) {
+    let _ = app.emit("deps://status", Status { state, message });
+}
+
+static RUNNING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[tauri::command]
+pub async fn ensure_deps(app: AppHandle) -> Result<(), String> {
+    let _guard = RUNNING.lock().await; // concurrent callers wait, then re-run
+    match ensure(&app).await {
+        Ok(warning) => { emit(&app, "ready", &warning); Ok(()) }
+        Err(e) => { emit(&app, "error", &e); Err(e) }
+    }
+}
+
+/// Returns a warning message (empty if none).
+async fn ensure(app: &AppHandle) -> Result<String, String> {
+    std::fs::create_dir_all(bin_dir(app)).map_err(|e| e.to_string())?;
+    let mut warning = String::new();
+    let ytdlp = ytdlp_path(app);
+    if runs_ok(&ytdlp, "--version").await {
+        emit(app, "working", "Updating yt-dlp…");
+        if !self_update(&ytdlp).await {
+            warning = "Could not check for yt-dlp updates; using installed version.".into();
+        }
+    } else {
+        emit(app, "working", "Downloading yt-dlp…");
+        install("yt-dlp", ytdlp_source()?, &ytdlp).await?;
+    }
+    for (name, path, arg, source) in [
+        ("ffmpeg", ffmpeg_path(app), "-version", ffmpeg_source as fn() -> Result<Source, String>),
+        ("deno", deno_path(app), "--version", deno_source),
+    ] {
+        if !runs_ok(&path, arg).await {
+            emit(app, "working", &format!("Downloading {name}…"));
+            install(name, source()?, &path).await?;
+        }
+    }
+    Ok(warning)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sha256_verify() {
+        // sha256("abc")
+        let h = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        assert!(verify_sha256(b"abc", h));
+        assert!(!verify_sha256(b"abd", h));
+        assert!(verify_sha256(b"abc", &h.to_uppercase()));
+    }
+
+    #[test]
+    fn finds_hash_in_sums_file() {
+        let body = "aaa111  yt-dlp\n0f192b  yt-dlp_macos\nccc333  yt-dlp_macos.zip\n";
+        assert_eq!(find_hash(body, "yt-dlp_macos").as_deref(), Some("0f192b"));
+        assert_eq!(find_hash(body, "yt-dlp").as_deref(), Some("aaa111"));
+        assert_eq!(find_hash(body, "yt-dlp_linux"), None);
+    }
+
+    #[test]
+    fn first_token_of_sumfile() {
+        assert_eq!(first_token("5cd46d  deno.zip\n").as_deref(), Some("5cd46d"));
+        assert_eq!(first_token("5cd46d\n").as_deref(), Some("5cd46d"));
+        assert_eq!(first_token("  \n"), None);
+    }
+
+    #[test]
+    fn sources_for_current_platform() {
+        for src in [ytdlp_source(), ffmpeg_source(), deno_source()] {
+            assert!(src.unwrap().url.starts_with("https://"));
+        }
+    }
+}
