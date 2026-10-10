@@ -4,6 +4,8 @@ use sha2::{Digest, Sha256};
 use std::env::consts::{ARCH, EXE_SUFFIX, OS};
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::AsyncWriteExt;
 
@@ -111,8 +113,18 @@ fn ffmpeg_source() -> Result<Source, String> {
     })
 }
 
+/// Shared client. Per-read timeout (not total) so slow-but-alive large archives still finish.
+fn client() -> &'static reqwest::Client {
+    static C: OnceLock<reqwest::Client> = OnceLock::new();
+    // same panic-on-TLS-init-failure behavior as reqwest::get
+    C.get_or_init(|| reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .read_timeout(Duration::from_secs(60))
+        .build().expect("http client"))
+}
+
 async fn fetch(url: &str) -> Result<reqwest::Response, String> {
-    reqwest::get(url).await.and_then(|r| r.error_for_status()).map_err(|e| format!("Download failed: {e}"))
+    client().get(url).send().await.and_then(|r| r.error_for_status()).map_err(|e| format!("Download failed: {e}"))
 }
 
 async fn fetch_text(url: &str) -> Result<String, String> {
