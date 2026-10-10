@@ -21,7 +21,7 @@ fn default_audio_quality() -> String { "best".into() }
 impl Settings {
     pub fn new(download_dir: PathBuf) -> Self {
         Self { download_dir, quality: None, container: "original".into(),
-               audio_format: "original".into(), shortcut: "CommandOrControl+Shift+Y".into(),
+               audio_format: "original".into(), shortcut: "Control+Alt+Y".into(),
                video_codec: default_codec(), audio_quality: default_audio_quality() }
     }
 }

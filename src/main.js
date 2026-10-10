@@ -22,6 +22,9 @@ function askPlaylist() {
 }
 
 // ---- banner / notice ----
+// URL input gets focus on launch (once enabled), shortcut and window activation — unless a dialog is open
+const focusUrl = () => { if (!document.querySelector("dialog[open]")) $("#url").focus(); };
+
 function setBanner({ state, message }) {
   const b = $("#banner");
   const usable = state === "ready" || state === "update";
@@ -31,7 +34,9 @@ function setBanner({ state, message }) {
   $("#banner-text").textContent = message || "";
   $("#banner-retry").hidden = state !== "error";
   $("#banner-close").hidden = !usable;
+  const wasDisabled = $("#url").disabled;
   document.querySelectorAll(".url").forEach((i) => (i.disabled = !usable));
+  if (usable && wasDisabled) focusUrl();
 }
 $("#banner-retry").onclick = () => invoke("ensure_deps").catch(() => {});
 $("#banner-close").onclick = () => ($("#banner").hidden = true);
@@ -55,7 +60,7 @@ function render(u) {
   let li = items.get(u.id);
   if (!li) {
     li = document.createElement("li");
-    li.innerHTML = '<span class="title"></span><button class="cancel">Cancel</button>' +
+    li.innerHTML = '<span class="title"></span><button class="cancel" aria-label="Cancel download" title="Cancel">&times;</button>' +
       '<span class="meta"></span><progress max="100"></progress><span class="msg"></span>';
     li.querySelector(".cancel").onclick = () => invoke("cancel_download", { id: u.id });
     items.set(u.id, li);
@@ -119,9 +124,45 @@ const fill = (s) => {
   $("#s-codec").value = s.video_codec;
   $("#s-aq").value = s.audio_quality;
   syncAq();
-  $("#s-shortcut").value = s.shortcut;
+  setShortcutField(s.shortcut);
 };
-$("#mac-note").hidden = !navigator.userAgent.includes("Mac");
+const MAC = navigator.userAgent.includes("Mac");
+$("#mac-note").hidden = !MAC;
+
+// ---- shortcut recorder: click the field, then press the keys ----
+// Stored value is a Tauri accelerator (e.g. "Control+Alt+Y"); the field shows ⌃⌥Y / Ctrl+Alt+Y.
+const SYMBOL = MAC ? { CommandOrControl: "⌘", Control: "⌃", Alt: "⌥", Shift: "⇧" }
+                   : { CommandOrControl: "Ctrl", Control: "Ctrl", Alt: "Alt", Shift: "Shift" };
+const prettyAccel = (a) => a.split("+").map((k) => SYMBOL[k] || k).join(MAC ? "" : "+");
+function setShortcutField(accel) {
+  const f = $("#s-shortcut");
+  f.dataset.accel = accel;
+  f.value = prettyAccel(accel);
+}
+// e.code names are accepted by the global-hotkey parser; shorten KeyY → Y, Digit1 → 1
+const keyName = (code) => code.replace(/^Key([A-Z])$/, "$1").replace(/^Digit(\d)$/, "$1");
+const sc = $("#s-shortcut");
+// the live global shortcut is released while recording so its own combo can be captured,
+// then the saved one is restored (a newly recorded combo takes effect on Save)
+sc.addEventListener("focus", () => { sc.value = "Press keys…"; invoke("suspend_shortcut").catch(() => {}); });
+sc.addEventListener("blur", () => {
+  setShortcutField(sc.dataset.accel || "");
+  invoke("set_shortcut", { accel: current.shortcut }).catch(() => {});
+});
+sc.addEventListener("keydown", (e) => {
+  if (e.key === "Tab") return;                       // keep keyboard navigation
+  e.preventDefault();
+  if (e.key === "Escape") { sc.blur(); return; }     // cancel recording, keep previous
+  if (["Shift", "Control", "Alt", "Meta"].includes(e.key)) return;  // wait for the main key
+  const mods = [];
+  if (MAC ? e.metaKey : e.ctrlKey) mods.push("CommandOrControl");
+  if (MAC && e.ctrlKey) mods.push("Control");
+  if (e.altKey) mods.push("Alt");
+  if (e.shiftKey) mods.push("Shift");
+  if (!mods.some((m) => m !== "Shift")) { sc.value = MAC ? "Include ⌘, ⌃ or ⌥" : "Include Ctrl or Alt"; return; }
+  setShortcutField([...mods, keyName(e.code)].join("+"));
+  sc.blur();
+});
 $("#open-settings").onclick = () => { showErr($("#s-err"), ""); fill(current); $("#settings-dialog").showModal(); };
 $("#s-cancel").onclick = () => $("#settings-dialog").close();
 $("#s-deps").onclick = () => invoke("update_deps").catch(() => {});
@@ -138,7 +179,7 @@ $("#settings-form").addEventListener("submit", async (e) => {
     video_codec: $("#s-codec").value, audio_quality: $("#s-aq").value };
   try {
     await invoke("save_settings", { s });
-    const accel = $("#s-shortcut").value.trim();
+    const accel = $("#s-shortcut").dataset.accel || "";
     if (accel && accel !== current.shortcut) await invoke("set_shortcut", { accel });
     current = { ...s, shortcut: accel || current.shortcut };
     $("#shortcut-note").hidden = true;
@@ -151,7 +192,8 @@ $("#settings-form").addEventListener("submit", async (e) => {
 // ---- startup (listeners first, then settings, shortcut, deps) ----
 (async () => {
   await listen("deps://status", ({ payload }) => setBanner(payload));
-  await listen("focus-input", () => $("#url").focus());
+  await listen("focus-input", focusUrl);
+  window.addEventListener("focus", focusUrl);
   await listen("download://update", ({ payload }) => render(payload));
   fill(await invoke("get_settings"));
   try {

@@ -34,7 +34,7 @@ Tauri v2를 사용한다. 공식 번들러와 CI 액션으로 3개 OS 설치 파
 
 - 일반 창 앱 (트레이 상주 없음)
 - 앱 실행 중이면 다른 앱 사용 중에도 전역 단축키로 창 활성화 및 URL 입력창 포커스
-- 단축키 기본값 Ctrl/Cmd+Shift+Y, 설정에서 변경 가능
+- 단축키 기본값 Ctrl+Option+Y (macOS) / Ctrl+Alt+Y (Windows·Ubuntu), 설정에서 변경 가능
 
 ### 메인 화면
 
@@ -72,7 +72,7 @@ Tauri v2를 사용한다. 공식 번들러와 CI 액션으로 3개 OS 설치 파
 | 음성 포맷 | 원본 |
 | 영상 코덱 우선순위 | 자동 |
 | 음질 | 최고 |
-| 전역 단축키 | Ctrl/Cmd+Shift+Y |
+| 전역 단축키 | Ctrl+Option+Y (macOS) / Ctrl+Alt+Y |
 | 의존성 수동 업데이트 | 버튼 |
 
 ## 비기능 요구사항 및 배포

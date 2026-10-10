@@ -38,6 +38,13 @@ fn set_shortcut(app: AppHandle, accel: String) -> Result<(), String> {
   Ok(())
 }
 
+/// Release the global shortcut while the settings field records a new one
+/// (otherwise the OS swallows the current combo); `set_shortcut` re-registers.
+#[tauri::command]
+fn suspend_shortcut(app: AppHandle) {
+  let _ = app.global_shortcut().unregister_all();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
@@ -65,7 +72,8 @@ pub fn run() {
       download::cancel_download,
       get_settings,
       save_settings,
-      set_shortcut
+      set_shortcut,
+      suspend_shortcut
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {

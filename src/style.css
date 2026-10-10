@@ -43,8 +43,11 @@ main .field > label:first-child, .list-head h2 { margin: 14px 0 6px; font-size: 
   border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.3); transition: transform .15s; }
 .field .check input:checked { background: var(--brand); }
 .field .check input:checked::before { transform: translateX(12px); }
-#clear { padding: 2px 8px; font-size: 12px; background: none; color: var(--muted); }
-#clear:hover { color: var(--fg); }
+/* Clear finished: small secondary pill — visible as a button, lighter than the URL slot */
+#clear { padding: 3px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--card);
+  color: var(--fg); font-size: 12px; font-weight: 600; }
+#clear:hover { border-color: var(--muted); }
+#clear:active { background: var(--line); }
 /* icon-only: no button chrome, still a real <button> for keyboard/focus */
 #open-settings { font-size: 24px; line-height: 1; padding: 2px 4px; border: 0; background: none;
   color: var(--muted); cursor: pointer; }
@@ -87,6 +90,10 @@ button { cursor: pointer; white-space: nowrap; }
 #list li[data-state="done"] .title { color: var(--faint); }
 #list li[data-state="error"] { background: var(--err-bg); border-left-color: var(--err); }
 #list li[data-state="canceled"] { opacity: .6; }
+/* cancel: small round icon button, quiet until hovered */
+#list .cancel { align-self: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%;
+  background: transparent; color: var(--muted); font-size: 16px; line-height: 22px; text-align: center; }
+#list .cancel:hover { background: var(--err-bg); color: var(--err); }
 #list .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 #list .meta { color: var(--muted); font-size: 12px; }
 #list li { animation: rise .2s ease-out; }
