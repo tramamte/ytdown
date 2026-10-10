@@ -20,10 +20,10 @@ h1 { font-size: 18px; margin: 0; } h2 { font-size: 14px; margin: 0; }
 
 /* ---- main window ---- */
 header { padding-bottom: 10px; border-bottom: 1px solid var(--line); }
-/* wordmark: red badge with a down arrow, then a tight heavy "ytdown" */
-h1 { display: flex; align-items: center; gap: 8px; font-size: 20px; font-weight: 800; letter-spacing: -.02em; }
-h1::before { content: "\2193"; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 7px;
-  background: var(--brand); color: #fff; font-size: 15px; font-weight: 900; }
+/* wordmark: the app icon, then a tight heavy "ytdown" */
+h1 { display: flex; align-items: center; gap: 6px; font-size: 20px; font-weight: 800; letter-spacing: -.02em; }
+/* the icon PNG has ~10% transparent padding; 30px shows a ~24px tile */
+h1 .logo { width: 30px; height: 30px; }
 /* section eyebrows: URL label and Downloads heading */
 main .field > label:first-child, .list-head h2 { margin: 14px 0 6px; font-size: 11px; font-weight: 700;
   letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
