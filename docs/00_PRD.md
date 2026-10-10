@@ -93,7 +93,7 @@ Tauri v2를 사용한다. 공식 번들러와 CI 액션으로 3개 OS 설치 파
 - 경량: 설치 파일에 yt-dlp/ffmpeg 미포함
 - UI 글꼴: Inter(SIL OFL, 352KB)를 앱에 포함해 OS와 관계없이 동일하게 표시 (한글 등은 시스템 글꼴)
 - 접근성: 텍스트 대비 WCAG AA(4.5:1) 이상, 키보드 포커스 표시
-- 배포 형식: macOS dmg, Windows msi 또는 exe, Ubuntu deb/AppImage
+- 배포 형식: macOS Apple Silicon dmg, Windows NSIS setup(.exe), Ubuntu x86_64 deb (CI 릴리스 산출물은 이 3개로 제한)
 - 서명: macOS 공증, Windows 코드 서명
 - 권한 안내: macOS 손쉬운 사용 권한 (전역 단축키)
 - 앱 자체 업데이트 기능 없음 (새 버전은 수동 설치)

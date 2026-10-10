@@ -4,7 +4,7 @@ Desktop app (Tauri v2) for downloading YouTube video or audio by pasting a link.
 
 ## Install
 
-Releases are on the GitHub Releases page (macOS, Windows, Ubuntu).
+Releases are on the GitHub Releases page: macOS (Apple Silicon) `.dmg`, Windows (NSIS) `-setup.exe`, Ubuntu (64-bit) `.deb`.
 
 - macOS/Windows builds may be unsigned until signing certificates are configured.
   On macOS 15+, open System Settings → Privacy & Security and click "Open Anyway"
