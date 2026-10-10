@@ -20,7 +20,10 @@ const UNSUPPORTED: &str = "Unsupported platform";
 pub fn bin_dir(app: &AppHandle) -> PathBuf {
     app.path().app_data_dir().expect("app data dir").join("bin")
 }
-pub fn ytdlp_path(app: &AppHandle) -> PathBuf { bin_dir(app).join(format!("yt-dlp{EXE_SUFFIX}")) }
+/// yt-dlp is the PyInstaller onedir build: this executable plus `_internal/` in `bin/yt-dlp/`.
+const YTDLP_EXE: &str = if cfg!(windows) { "yt-dlp.exe" } else if cfg!(target_os = "macos") { "yt-dlp_macos" } else { "yt-dlp_linux" };
+fn ytdlp_dir(app: &AppHandle) -> PathBuf { bin_dir(app).join("yt-dlp") }
+pub fn ytdlp_path(app: &AppHandle) -> PathBuf { ytdlp_dir(app).join(YTDLP_EXE) }
 pub fn ffmpeg_path(app: &AppHandle) -> PathBuf { bin_dir(app).join(format!("ffmpeg{EXE_SUFFIX}")) }
 pub fn deno_path(app: &AppHandle) -> PathBuf { bin_dir(app).join(format!("deno{EXE_SUFFIX}")) }
 
@@ -66,16 +69,16 @@ enum Check {
 struct Source {
     url: String,
     check: Check,
-    /// Archive entry to extract; None = the download is the binary itself.
+    /// Archive entry to extract; None = the zip is the binary's whole directory.
     entry: Option<String>,
 }
 
 /// `base` is a release download URL ending in `/`.
 fn ytdlp_source(base: &str) -> Result<Source, String> {
     let asset = match (OS, ARCH) {
-        ("macos", _) => "yt-dlp_macos",
-        ("windows", "x86_64") => "yt-dlp.exe",
-        ("linux", "x86_64") => "yt-dlp_linux",
+        ("macos", _) => "yt-dlp_macos.zip",
+        ("windows", "x86_64") => "yt-dlp_win.zip",
+        ("linux", "x86_64") => "yt-dlp_linux.zip",
         _ => return Err(UNSUPPORTED.into()),
     };
     Ok(Source {
@@ -184,17 +187,49 @@ fn extract(archive: &Path, tar_xz: bool, entry: &str, out: &Path) -> Result<(), 
     }
 }
 
-/// Downloads, verifies and installs `src` at `dest`. Temp files are removed on every path.
+/// Extracts the whole zip `archive` into the new directory `out` (paths kept inside `out`,
+/// unix modes restored); `exe` must be in it.
+fn extract_dir(archive: &Path, out: &Path, exe: &str) -> Result<(), String> {
+    let file = std::fs::File::open(archive).map_err(|e| format!("Extract failed: {e}"))?;
+    zip::ZipArchive::new(file).and_then(|mut z| z.extract(out)).map_err(|e| format!("Extract failed: {e}"))?;
+    if !out.join(exe).is_file() { return Err(format!("{exe} not found in archive")); }
+    Ok(())
+}
+
+/// Removes a file or directory tree, if present.
+fn remove_any(p: &Path) {
+    let _ = if p.is_dir() { std::fs::remove_dir_all(p) } else { std::fs::remove_file(p) };
+}
+
+/// Swaps `new` in at `dest` (a file, a directory, or absent) via `<dest>.old`.
+/// On failure `new` stays where it is and `dest` is restored.
+fn replace(new: &Path, dest: &Path) -> std::io::Result<()> {
+    let old = dest.with_file_name(format!("{}.old", dest.file_name().expect("file name").to_string_lossy()));
+    remove_any(&old); // leftover of a crashed run
+    let had = dest.symlink_metadata().is_ok();
+    if had { std::fs::rename(dest, &old)?; }
+    if let Err(e) = std::fs::rename(new, dest) {
+        if had { let _ = std::fs::rename(&old, dest); }
+        return Err(e);
+    }
+    remove_any(&old); // best effort; a leftover is removed by the next swap
+    Ok(())
+}
+
+/// Downloads, verifies and installs `src` at the binary path `dest`; a directory build replaces
+/// `dest`'s whole directory. Temp files are removed on every path.
 async fn install(name: &str, src: Source, dest: &Path) -> Result<(), String> {
-    let archive = dest.with_file_name(format!("{name}.download"));
-    let part = dest.with_file_name(format!("{name}.part"));
-    let result = install_inner(name, &src, &archive, &part, dest).await;
+    let target = if src.entry.is_none() { dest.parent().expect("binary dir") } else { dest };
+    let archive = target.with_file_name(format!("{name}.download"));
+    let part = target.with_file_name(format!("{name}.part"));
+    remove_any(&part); // leftover of a crashed run
+    let result = install_inner(name, &src, &archive, &part, dest, target).await;
     let _ = std::fs::remove_file(&archive);
-    let _ = std::fs::remove_file(&part);
+    remove_any(&part);
     result
 }
 
-async fn install_inner(name: &str, src: &Source, archive: &Path, part: &Path, dest: &Path) -> Result<(), String> {
+async fn install_inner(name: &str, src: &Source, archive: &Path, part: &Path, dest: &Path, target: &Path) -> Result<(), String> {
     let mismatch = || format!("Checksum mismatch for {name}");
     let expected = match &src.check {
         Check::Listed { sums_url, asset } => find_hash(&fetch_text(sums_url).await?, asset),
@@ -208,16 +243,23 @@ async fn install_inner(name: &str, src: &Source, archive: &Path, part: &Path, de
     if expected.is_some_and(|h| !hex_eq(&got, &h)) {
         return Err(mismatch());
     }
-    match &src.entry {
+    let (a, p) = (archive.to_owned(), part.to_owned());
+    let bin = match &src.entry {
         Some(entry) => {
-            let (a, e, p) = (archive.to_owned(), entry.clone(), part.to_owned());
+            let e = entry.clone();
             let tar_xz = src.url.ends_with(".tar.xz");
             tokio::task::spawn_blocking(move || extract(&a, tar_xz, &e, &p)).await.map_err(|e| e.to_string())??;
+            part.to_owned()
         }
-        None => std::fs::rename(archive, part).map_err(|e| e.to_string())?,
-    }
+        None => {
+            let exe = dest.file_name().expect("binary file name").to_string_lossy().into_owned();
+            let bin = part.join(&exe);
+            tokio::task::spawn_blocking(move || extract_dir(&a, &p, &exe)).await.map_err(|e| e.to_string())??;
+            bin
+        }
+    };
     if let Check::Binary(hash) = src.check {
-        let p = part.to_owned();
+        let p = bin.clone();
         let got = tokio::task::spawn_blocking(move || sha256_file(&p)).await.map_err(|e| e.to_string())?
             .map_err(|e| e.to_string())?;
         if !hex_eq(&got, hash) { return Err(mismatch()); }
@@ -225,12 +267,11 @@ async fn install_inner(name: &str, src: &Source, archive: &Path, part: &Path, de
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(part, std::fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
     }
-    std::fs::rename(part, dest).map_err(|e| e.to_string())?;
     #[cfg(target_os = "macos")]
-    let _ = std::process::Command::new("xattr").args(["-d", "com.apple.quarantine"]).arg(dest).output();
-    Ok(())
+    let _ = std::process::Command::new("xattr").args(["-dr", "com.apple.quarantine"]).arg(part).output();
+    replace(part, target).map_err(|e| e.to_string())
 }
 
 async fn runs_ok(path: &Path, arg: &str) -> bool {
@@ -271,31 +312,35 @@ fn pending_path(bin: &Path) -> PathBuf {
     bin.with_file_name("pending").join(bin.file_name().expect("binary file name"))
 }
 
-/// Moves a staged update over `bin`. On failure the staged file is dropped.
+/// Moves a staged update over `bin`. On failure the staged update is dropped.
 fn apply_pending(bin: &Path) {
     let pending = pending_path(bin);
-    if !pending.exists() { return; }
-    if let Err(e) = std::fs::rename(&pending, bin) {
-        log::warn!("Could not apply staged update {}: {e}", pending.display());
+    if pending.is_file() { // onefile build staged by an older ytdown
         let _ = std::fs::remove_file(&pending);
+        return;
+    }
+    if !pending.exists() { return; }
+    if let Err(e) = replace(&pending, bin) {
+        log::warn!("Could not apply staged update {}: {e}", pending.display());
+        remove_any(&pending);
     }
 }
 
-/// Moves a staged update over `bin` now. On failure (e.g. Windows exe locked) it stays staged.
+/// Moves a staged update over `bin` now. On failure (e.g. Windows exe running) it stays staged.
 fn promote_pending(bin: &Path) -> std::io::Result<()> {
-    std::fs::rename(pending_path(bin), bin)
+    replace(&pending_path(bin), bin)
 }
 
 /// Stages a newer yt-dlp in `pending/`. Returns (latest version, whether it was staged).
 async fn stage_update(app: &AppHandle, installed: &str) -> Result<(String, bool), String> {
-    let ytdlp = ytdlp_path(app);
     let latest = parse_tag(&fetch_text(YTDLP_API).await?).ok_or("No tag_name in yt-dlp release info")?;
     if !is_newer(installed, &latest) { return Ok((latest, false)); }
-    let pending = pending_path(&ytdlp);
-    if version(&pending).await.as_deref() != Some(latest.as_str()) {
+    let pending = pending_path(&ytdlp_dir(app));
+    let exe = pending.join(YTDLP_EXE);
+    if version(&exe).await.as_deref() != Some(latest.as_str()) {
         std::fs::create_dir_all(pending.parent().expect("pending dir")).map_err(|e| e.to_string())?;
         let base = format!("https://github.com/yt-dlp/yt-dlp/releases/download/{latest}/");
-        install("yt-dlp", ytdlp_source(&base)?, &pending).await?;
+        install("yt-dlp", ytdlp_source(&base)?, &exe).await?;
     }
     Ok((latest, true))
 }
@@ -376,14 +421,13 @@ async fn update(app: &AppHandle) -> Result<(), String> {
         emit(app, "error", &e);
         return Err(e);
     }
-    let ytdlp = ytdlp_path(app);
-    let staged = match version(&ytdlp).await {
+    let staged = match version(&ytdlp_path(app)).await {
         // stage_update reuses an already-staged latest build instead of re-downloading.
         Some(installed) => stage_update(app, &installed).await,
         None => Err("yt-dlp does not run".into()),
     };
     match staged {
-        Ok((v, true)) => match promote_pending(&ytdlp) {
+        Ok((v, true)) => match promote_pending(&ytdlp_dir(app)) {
             Ok(()) => emit(app, "update", &format!("yt-dlp updated to {v}.")),
             Err(e) => {
                 log::warn!("Could not replace yt-dlp now: {e}");
@@ -392,7 +436,7 @@ async fn update(app: &AppHandle) -> Result<(), String> {
         },
         Ok((v, false)) => {
             // A leftover staged build is not newer; drop it so next launch can't downgrade.
-            let _ = std::fs::remove_file(pending_path(&ytdlp));
+            remove_any(&pending_path(&ytdlp_dir(app)));
             emit(app, "update", &format!("yt-dlp is up to date ({v})."));
         }
         Err(e) => {
@@ -410,7 +454,7 @@ async fn ensure(app: &AppHandle, probe: bool) -> Result<(), String> {
     std::fs::create_dir_all(bin_dir(app)).map_err(|e| e.to_string())?;
     // Only on the first call (launch): later calls must not swap a binary that may be running.
     if !APPLIED.swap(true, Ordering::SeqCst) {
-        apply_pending(&ytdlp_path(app));
+        apply_pending(&ytdlp_dir(app));
     }
     for (name, path, arg, source) in [
         ("yt-dlp", ytdlp_path(app), "--version", (|| ytdlp_source(YTDLP_BASE)) as fn() -> Result<Source, String>),
@@ -534,37 +578,141 @@ mod tests {
         assert_eq!(parse_tag("not json"), None);
     }
 
+    /// A onedir build `dir/` whose executable holds `v`.
+    fn onedir(dir: &Path, v: &str) {
+        std::fs::create_dir_all(dir.join("_internal")).unwrap();
+        std::fs::write(dir.join(YTDLP_EXE), v).unwrap();
+    }
+
+    fn exe_of(dir: &Path) -> String { std::fs::read_to_string(dir.join(YTDLP_EXE)).unwrap() }
+
     #[test]
-    fn applies_pending_binary() {
+    fn applies_pending_dir() {
         let dir = std::env::temp_dir().join(format!("ytdown-pending-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("pending")).unwrap();
         let bin = dir.join("yt-dlp");
-        std::fs::write(&bin, "old").unwrap();
+        onedir(&bin, "old");
         apply_pending(&bin); // absent -> no-op
-        assert_eq!(std::fs::read_to_string(&bin).unwrap(), "old");
-        std::fs::write(pending_path(&bin), "new").unwrap();
+        assert_eq!(exe_of(&bin), "old");
+        onedir(&pending_path(&bin), "new");
         apply_pending(&bin);
-        assert_eq!(std::fs::read_to_string(&bin).unwrap(), "new");
+        assert_eq!(exe_of(&bin), "new");
+        assert!(!pending_path(&bin).exists());
+        assert!(!dir.join("yt-dlp.old").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn drops_stale_pending_onefile() {
+        let dir = std::env::temp_dir().join(format!("ytdown-stale-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("pending")).unwrap();
+        let bin = dir.join("yt-dlp");
+        onedir(&bin, "cur");
+        std::fs::write(pending_path(&bin), "onefile").unwrap(); // staged by the old scheme
+        apply_pending(&bin);
+        assert_eq!(exe_of(&bin), "cur");
+        assert!(!pending_path(&bin).exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn promote_keeps_pending_on_failure() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("ytdown-promote-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("pending")).unwrap();
+        let bin = dir.join("yt-dlp");
+        onedir(&bin, "old");
+        onedir(&pending_path(&bin), "new");
+        // A read-only parent makes the renames fail (stands in for a running exe on Windows).
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let r = promote_pending(&bin);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(r.is_err());
+        assert_eq!(exe_of(&pending_path(&bin)), "new");
+        assert_eq!(exe_of(&bin), "old");
+        promote_pending(&bin).unwrap();
+        assert_eq!(exe_of(&bin), "new");
         assert!(!pending_path(&bin).exists());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
-    fn promote_keeps_pending_on_failure() {
-        let dir = std::env::temp_dir().join(format!("ytdown-promote-{}", std::process::id()));
-        std::fs::create_dir_all(dir.join("pending")).unwrap();
-        let bin = dir.join("yt-dlp");
-        std::fs::write(pending_path(&bin), "new").unwrap();
-        // A non-empty directory at `bin` makes the rename fail (stands in for a locked exe).
-        std::fs::create_dir_all(bin.join("x")).unwrap();
-        assert!(promote_pending(&bin).is_err());
-        assert_eq!(std::fs::read_to_string(pending_path(&bin)).unwrap(), "new");
+    fn replaces_dir_file_or_nothing() {
+        let dir = std::env::temp_dir().join(format!("ytdown-replace-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (bin, part) = (dir.join("yt-dlp"), dir.join("yt-dlp.part"));
+        // nothing installed
+        onedir(&part, "a");
+        replace(&part, &bin).unwrap();
+        assert_eq!(exe_of(&bin), "a");
+        // existing dir: old content goes away
+        std::fs::write(bin.join("_internal/stale"), "x").unwrap();
+        onedir(&part, "b");
+        std::fs::create_dir_all(dir.join("yt-dlp.old/junk")).unwrap(); // crashed-run leftover
+        replace(&part, &bin).unwrap();
+        assert_eq!(exe_of(&bin), "b");
+        assert!(!bin.join("_internal/stale").exists());
+        // migration: the onefile build is a FILE at bin/yt-dlp
         std::fs::remove_dir_all(&bin).unwrap();
-        std::fs::write(&bin, "old").unwrap();
-        promote_pending(&bin).unwrap();
-        assert_eq!(std::fs::read_to_string(&bin).unwrap(), "new");
-        assert!(!pending_path(&bin).exists());
+        std::fs::write(&bin, "onefile").unwrap();
+        assert!(!looks_installed(&bin.join(YTDLP_EXE)));
+        onedir(&part, "c");
+        replace(&part, &bin).unwrap();
+        assert_eq!(exe_of(&bin), "c");
+        let mut left: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
+        left.sort();
+        assert_eq!(left, ["yt-dlp"]); // no .part / .old
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn extracts_onedir_zip() {
+        use std::io::Write;
+        use zip::write::SimpleFileOptions;
+        let dir = std::env::temp_dir().join(format!("ytdown-zip-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let zip_at = |name: &str, entries: &[(&str, u32)]| {
+            let path = dir.join(name);
+            let mut w = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+            for (n, mode) in entries {
+                w.start_file(*n, SimpleFileOptions::default().unix_permissions(*mode)).unwrap();
+                w.write_all(n.as_bytes()).unwrap();
+            }
+            w.finish().unwrap();
+            path
+        };
+        let good = zip_at("good.zip", &[(YTDLP_EXE, 0o755), ("_internal/a/b.txt", 0o644)]);
+        let out = dir.join("out");
+        extract_dir(&good, &out, YTDLP_EXE).unwrap();
+        assert_eq!(exe_of(&out), YTDLP_EXE);
+        assert_eq!(std::fs::read_to_string(out.join("_internal/a/b.txt")).unwrap(), "_internal/a/b.txt");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode(&out.join(YTDLP_EXE)), 0o755);
+            assert_eq!(mode(&out.join("_internal/a/b.txt")), 0o644);
+        }
+        let evil = zip_at("evil.zip", &[(YTDLP_EXE, 0o755), ("../evil", 0o644)]);
+        assert!(extract_dir(&evil, &dir.join("out2"), YTDLP_EXE).is_err());
+        assert!(!dir.join("evil").exists());
+        let no_exe = zip_at("noexe.zip", &[("_internal/x", 0o644)]);
+        assert!(extract_dir(&no_exe, &dir.join("out3"), YTDLP_EXE).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn ytdlp_onedir_asset() {
+        let src = ytdlp_source("b/").unwrap();
+        assert!(src.entry.is_none());
+        let want = if cfg!(target_os = "macos") { ("b/yt-dlp_macos.zip", "yt-dlp_macos") }
+            else if cfg!(windows) { ("b/yt-dlp_win.zip", "yt-dlp.exe") }
+            else { ("b/yt-dlp_linux.zip", "yt-dlp_linux") };
+        assert_eq!((src.url.as_str(), YTDLP_EXE), want);
+        assert!(matches!(src.check, Check::Listed { asset, .. } if format!("b/{asset}") == src.url));
     }
 
     #[test]
