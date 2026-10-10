@@ -1,4 +1,6 @@
 #[allow(dead_code)] // consumed by download flow in Task 6
+mod progress;
+#[allow(dead_code)] // consumed by download flow in Task 6
 mod url;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
