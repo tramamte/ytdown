@@ -24,7 +24,7 @@ function askPlaylist() {
 // ---- banner / notice ----
 function setBanner({ state, message }) {
   const b = $("#banner");
-  b.className = state === "error" ? "error" : state === "ready" ? "warn" : "";
+  b.className = state === "error" ? "error" : state === "ready" ? "warn" : "info";
   b.hidden = state === "ready" && !message;
   $("#banner-text").textContent = message || "";
   $("#banner-retry").hidden = state !== "error";
