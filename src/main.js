@@ -81,7 +81,7 @@ async function submit(input) {
       playlist = c === "all";
     }
     input.value = "";
-    await invoke("start_download", { url, kind: input.dataset.kind, playlist });
+    await invoke("start_download", { url, kind: $("#audio-only").checked ? "audio" : "video", playlist });
   } catch (e) {
     flash(input, e);
   }
@@ -134,7 +134,7 @@ $("#settings-form").addEventListener("submit", async (e) => {
 // ---- startup (listeners first, then settings, shortcut, deps) ----
 (async () => {
   await listen("deps://status", ({ payload }) => setBanner(payload));
-  await listen("focus-input", () => $("#video").focus());
+  await listen("focus-input", () => $("#url").focus());
   await listen("download://update", ({ payload }) => render(payload));
   fill(await invoke("get_settings"));
   try {
