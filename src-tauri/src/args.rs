@@ -14,7 +14,9 @@ pub fn build(kind: Kind, url: &str, playlist: bool, s: &Settings, ffmpeg: &Path,
         // --print implies --quiet, which would suppress progress lines
         "--progress".into(),
         "--progress-template".into(), "download:ytdown:%(progress._percent_str)s".into(),
-        "--print".into(), "before_dl:ytdown-title:%(title)s".into(), "--no-simulate".into(),
+        "--print".into(), "before_dl:ytdown-title:%(title)s".into(),
+        // final path after merge/extract/move; one line per downloaded item
+        "--print".into(), "after_move:ytdown-file:%(filepath)s".into(), "--no-simulate".into(),
         "--ffmpeg-location".into(), ffmpeg.display().to_string(),
         "--js-runtimes".into(), format!("deno:{}", deno.display()),
         "-P".into(), format!("temp:{}", tmp.display()),
@@ -77,6 +79,8 @@ mod tests {
         assert!(has_pair(&a, ["--js-runtimes", "deno:/deno"]));
         assert!(has_pair(&a, ["-o", "%(title)s.%(ext)s"]));
         assert!(has_pair(&a, ["--encoding", "utf-8"]));
+        assert!(has_pair(&a, ["--print", "after_move:ytdown-file:%(filepath)s"]));
+        assert!(has_pair(&a, ["--print", "before_dl:ytdown-title:%(title)s"]));
         assert!(has_pair(&a, ["-P", "home:/dl"]));
         assert!(has_pair(&a, ["-P", "temp:/tmp/1"]));
         assert_eq!(&a[a.len() - 2..], ["--", "https://youtu.be/x"]);

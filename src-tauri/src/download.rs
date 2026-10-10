@@ -36,6 +36,7 @@ struct Update {
     state: &'static str,
     percent: f32,
     message: String,
+    size: u64, // bytes of the finished files; 0 until done or if unknown
 }
 
 #[tauri::command]
@@ -55,7 +56,7 @@ pub fn start_download(app: AppHandle, state: State<'_, Manager>, url: String, ki
     let tok = CancellationToken::new();
     state.jobs.lock().unwrap().insert(id, tok.clone());
     let url = url.trim().to_string();
-    let ev = Update { id, title: url.clone(), kind, state: "queued", percent: 0.0, message: String::new() };
+    let ev = Update { id, title: url.clone(), kind, state: "queued", percent: 0.0, message: String::new(), size: 0 };
     tauri::async_runtime::spawn(run_job(app, state.sem.clone(), tok, ev, url, playlist));
     Ok(id)
 }
@@ -152,6 +153,7 @@ async fn run(app: &AppHandle, tok: &CancellationToken, ev: &mut Update, a: &[Str
     let (mut ob, mut eb) = (Vec::new(), Vec::new());
     let mut tail: Vec<String> = Vec::new();
     let (mut out_lines, mut spoke) = (0, false);
+    let mut files: Vec<String> = Vec::new();
 
     // drain both pipes concurrently (a full pipe would block yt-dlp), then reap
     let status = loop {
@@ -162,6 +164,7 @@ async fn run(app: &AppHandle, tok: &CancellationToken, ev: &mut Update, a: &[Str
                     match progress::parse(&decode(&ob)) {
                         Some(Line::Title(t)) => { ev.title = t; emit(app, ev) }
                         Some(Line::Percent(p)) => { ev.percent = p; emit(app, ev) }
+                        Some(Line::File(f)) => files.push(f),
                         None => {}
                     }
                     ob.clear();
@@ -188,7 +191,10 @@ async fn run(app: &AppHandle, tok: &CancellationToken, ev: &mut Update, a: &[Str
         }
     };
     Some(match status {
-        Ok(s) if s.success() => ("done", String::new()),
+        Ok(s) if s.success() => {
+            ev.size = total_size(&files);
+            ("done", String::new())
+        }
         Ok(s) if never_started(true, s.code(), out_lines, spoke) => {
             log::warn!("yt-dlp did not start: {}", failure_message(&tail, s.code()));
             return None;
@@ -230,6 +236,11 @@ async fn kill_tree(child: &mut tokio::process::Child) {
     let _ = deps::command(Path::new("taskkill")).args(["/T", "/F", "/PID", &pid.to_string()]).status().await;
     let _ = child.start_kill(); // fails harmlessly if already dead
     let _ = child.wait().await;
+}
+
+/// Sum of file sizes; missing/unreadable paths count as 0.
+fn total_size(paths: &[String]) -> u64 {
+    paths.iter().filter_map(|p| std::fs::metadata(p).ok()).map(|m| m.len()).sum()
 }
 
 fn decode(line: &[u8]) -> String {
@@ -278,6 +289,18 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
         panic!("grandchild {gc} survived");
+    }
+
+    #[test]
+    fn sums_sizes_ignoring_missing() {
+        let d = std::env::temp_dir().join(format!("ytdown-size-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let (a, b) = (d.join("a"), d.join("b"));
+        std::fs::write(&a, [0u8; 10]).unwrap();
+        std::fs::write(&b, [0u8; 5]).unwrap();
+        let paths = vec![a.display().to_string(), b.display().to_string(), d.join("missing").display().to_string()];
+        assert_eq!(total_size(&paths), 15);
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

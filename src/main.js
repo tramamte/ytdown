@@ -43,6 +43,14 @@ function notice(msg) {
 
 // ---- downloads ----
 const LABEL = { queued: "Queued", running: "Downloading", done: "Done", error: "Failed", canceled: "Canceled" };
+// decimal units like macOS Finder
+function formatSize(n) {
+  if (n < 1000) return `${n} B`;
+  for (const unit of ["KB", "MB", "GB"]) {
+    n /= 1000;
+    if (n < 1000 || unit === "GB") return `${n.toFixed(1)} ${unit}`;
+  }
+}
 function render(u) {
   let li = items.get(u.id);
   if (!li) {
@@ -56,7 +64,8 @@ function render(u) {
   const active = u.state === "queued" || u.state === "running";
   li.dataset.state = u.state;
   li.querySelector(".title").textContent = u.title || "(untitled)";
-  li.querySelector(".meta").textContent = `${u.kind === "audio" ? "Audio" : "Video"} · ${LABEL[u.state] || u.state}`;
+  const label = u.state === "done" && u.size > 0 ? formatSize(u.size) : LABEL[u.state] || u.state;
+  li.querySelector(".meta").textContent = `${u.kind === "audio" ? "Audio" : "Video"} · ${label}`;
   const p = li.querySelector("progress");
   if (u.state === "queued") p.removeAttribute("value");
   else p.value = u.state === "done" ? 100 : u.percent || 0;
