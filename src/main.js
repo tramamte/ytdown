@@ -89,7 +89,7 @@ $("#clear").onclick = () => {
   }
 };
 
-async function submit(input) {
+async function submit(input, audioOnce = false) {
   const url = input.value.trim();
   if (!url) return;
   flash(input, "");
@@ -103,13 +103,13 @@ async function submit(input) {
       playlist = c === "all";
     }
     input.value = "";
-    await invoke("start_download", { url, kind: $("#audio-only").checked ? "audio" : "video", playlist });
+    await invoke("start_download", { url, kind: audioOnce || $("#audio-only").checked ? "audio" : "video", playlist });
   } catch (e) {
     flash(input, e);
   }
 }
 document.querySelectorAll(".url").forEach((i) =>
-  i.addEventListener("keydown", (e) => e.key === "Enter" && submit(i)));
+  i.addEventListener("keydown", (e) => e.key === "Enter" && !e.isComposing && submit(i, e.shiftKey)));  // Shift+Enter: audio this time
 
 // ---- settings ----
 let current;
@@ -212,6 +212,16 @@ document.addEventListener("keydown", (e) => {
   if (a === "open") $("#open-settings").click();
   else $("#settings-form").requestSubmit();
 });
+
+// ---- Audio only: ⌘⇧A / Ctrl+Shift+A toggles (main window only); Shift+Enter in the URL field = audio once ----
+document.addEventListener("keydown", (e) => {
+  if (e.defaultPrevented || document.querySelector("dialog[open]")) return;
+  if ((MAC ? e.metaKey : e.ctrlKey) && e.shiftKey && !e.altKey && e.code === "KeyA") {
+    e.preventDefault();
+    $("#audio-only").checked = !$("#audio-only").checked;
+  }
+});
+$("#audio-hint").textContent = MAC ? "⌘⇧A toggle · ⇧↩ audio once" : "Ctrl+Shift+A toggle · Shift+Enter audio once";
 
 // ---- startup (listeners first, then settings, shortcut, deps) ----
 (async () => {
