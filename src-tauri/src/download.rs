@@ -99,21 +99,28 @@ impl Tracker {
             percent: 0.0, stage: 0, stages: 0, stream: "", size: 0, message: String::new() });
     }
 
-    /// Applies a stdout line. Returns (parent changed, child row to emit).
+    /// Applies a stdout line. Returns (parent changed, child rows to emit).
     /// Single videos update the parent as before; playlist jobs update the running child.
-    fn stdout(&mut self, ev: &mut Update, l: Line) -> (bool, Option<Item>) {
+    fn stdout(&mut self, ev: &mut Update, l: Line) -> (bool, Vec<Item>) {
+        let mut out = Vec::new();
         match l {
             Line::Item { index, total, playlist_title } => {
+                // previous item ended without its file or an ERROR line
+                if let Some(it) = self.running() {
+                    (it.state, it.message) = ("error", "Did not finish".into());
+                    out.push(it.clone());
+                    ev.items_failed += 1;
+                }
                 if !playlist_title.is_empty() { ev.title = playlist_title; }
                 ev.items_total = total;
                 self.push(ev, index);
             }
             Line::Title(t) => {
-                if !ev.playlist { ev.title = t; return (true, None) }
-                let Some(it) = self.running() else { return (false, None) };
+                if !ev.playlist { ev.title = t; return (true, out) }
+                let Some(it) = self.running() else { return (false, out) };
                 it.title = t;
             }
-            Line::Formats(f) => { self.formats = f; self.max = Default::default(); return (false, None) }
+            Line::Formats(f) => { self.formats = f; self.max = Default::default(); return (false, out) }
             Line::Progress { percent, format_id, is_video } => {
                 let p = (
                     monotonic(&mut self.max, &format_id, percent),
@@ -121,20 +128,21 @@ impl Tracker {
                     self.formats.len() as u32,
                     if is_video { "video" } else { "audio" },
                 );
-                if !ev.playlist { (ev.percent, ev.stage, ev.stages, ev.stream) = p; return (true, None) }
-                let Some(it) = self.running() else { return (false, None) };
+                if !ev.playlist { (ev.percent, ev.stage, ev.stages, ev.stream) = p; return (true, out) }
+                let Some(it) = self.running() else { return (false, out) };
                 (it.percent, it.stage, it.stages, it.stream) = p;
             }
             Line::File(f) => {
                 let size = total_size(std::slice::from_ref(&f));
                 self.files.push(f);
-                let Some(it) = self.running() else { return (false, None) };
+                let Some(it) = self.running() else { return (false, out) };
                 (it.state, it.size, it.percent) = ("done", size, 100.0);
                 ev.items_done += 1;
             }
         }
         self.update_percent(ev);
-        (true, self.items.last().cloned())
+        out.extend(self.items.last().cloned());
+        (true, out)
     }
 
     /// An `ERROR:` line of a playlist job fails the running item, or else an item that failed
@@ -179,6 +187,8 @@ impl Tracker {
     fn outcome(&self, ev: &mut Update, ok: bool, failure: String) -> (&'static str, String) {
         ev.size = total_size(&self.files);
         let total = if ev.items_total > 0 { ev.items_total } else { self.items.len() as u32 };
+        // items that never ran (yt-dlp died early) count as failed
+        ev.items_failed = ev.items_failed.max(total.saturating_sub(ev.items_done));
         if ok && ev.items_failed == 0 {
             ("done", String::new())
         } else if ev.items_done == 0 || ev.items_failed == 0 {
@@ -317,9 +327,9 @@ async fn run(app: &AppHandle, tok: &CancellationToken, ev: &mut Update, a: &[Str
                 Ok(n) if n > 0 => {
                     out_lines += 1;
                     if let Some(l) = progress::parse(&decode(&ob)) {
-                        let (parent, item) = t.stdout(ev, l);
+                        let (parent, rows) = t.stdout(ev, l);
                         if parent { emit(app, ev) }
-                        if let Some(it) = item { emit_item(app, &it) }
+                        for it in &rows { emit_item(app, it) }
                     }
                     ob.clear();
                 }
@@ -501,8 +511,8 @@ mod tests {
         let mut out = Vec::new();
         for l in lines {
             out.extend(match l.strip_prefix("E:") {
-                Some(e) => t.stderr(ev, e),
-                None => progress::parse(l).and_then(|x| t.stdout(ev, x).1),
+                Some(e) => t.stderr(ev, e).into_iter().collect(),
+                None => progress::parse(l).map(|x| t.stdout(ev, x).1).unwrap_or_default(),
             });
         }
         out
@@ -523,16 +533,17 @@ mod tests {
     fn playlist_items_done_in_order() {
         let (d, f) = temp_files("pl-ok", &[10, 5]);
         // captured from yt-dlp 2026.08.19 (PLr-mgdpse3TpWFoJm99Y9RkXcL6r1RaWM, default video settings), trimmed
-        let l = lines(&["ytdown-item:1|6|5 Seconds Countdown Timer with Soundeffect", "ytdown-title:Five A",
+        // (count edited 6 → 2 so the trimmed run is complete)
+        let l = lines(&["ytdown-item:1|2|5 Seconds Countdown Timer with Soundeffect", "ytdown-title:Five A",
             "ytdown-formats:136+251", "ytdown: 60.1%|136|avc1.64001F|NA|NA", "ytdown:100.0%|136|avc1.64001F|NA|NA",
             "ytdown:  1.0%|251|none|NA|NA", "ytdown:100.0%|251|none|NA|NA", &format!("ytdown-file:{}", f[0]),
-            "ytdown-item:2|6|5 Seconds Countdown Timer with Soundeffect", "ytdown-title:Five B",
+            "ytdown-item:2|2|5 Seconds Countdown Timer with Soundeffect", "ytdown-title:Five B",
             "ytdown-formats:136+251", "ytdown: 86.1%|136|avc1.64001F|NA|NA", &format!("ytdown-file:{}", f[1])]);
         let (mut t, mut ev) = (Tracker::default(), update(true));
         let rows = replay(&mut t, &mut ev, &l);
         assert_eq!(ev.title, "5 Seconds Countdown Timer with Soundeffect");
-        assert_eq!((ev.items_done, ev.items_failed, ev.items_total), (2, 0, 6));
-        assert!((ev.percent - 200.0 / 6.0).abs() < 0.01, "{}", ev.percent);
+        assert_eq!((ev.items_done, ev.items_failed, ev.items_total), (2, 0, 2));
+        assert_eq!(ev.percent, 100.0);
         assert_eq!(rows.first().map(|r| (r.index, r.state, r.title.as_str())), Some((1, "running", "")));
         let last: Vec<_> = t.items.iter().map(|r| (r.job_id, r.index, r.title.as_str(), r.state, r.size)).collect();
         assert_eq!(last, [(7, 1, "Five A", "done", 10), (7, 2, "Five B", "done", 5)]);
@@ -546,7 +557,7 @@ mod tests {
         let (mut t, mut ev) = (Tracker::default(), update(true));
         fn feed(t: &mut Tracker, ev: &mut Update, l: &str) -> (bool, Option<(f32, u32, u32, &'static str)>) {
             let r = t.stdout(ev, progress::parse(l).unwrap());
-            (r.0, r.1.map(|i| (i.percent, i.stage, i.stages, i.stream)))
+            (r.0, r.1.last().map(|i| (i.percent, i.stage, i.stages, i.stream)))
         }
         assert_eq!(feed(&mut t, &mut ev, "ytdown-item:1|2|P").1, Some((0.0, 0, 0, "")));
         feed(&mut t, &mut ev, "ytdown-formats:136+251");
@@ -574,7 +585,8 @@ mod tests {
         let rows: Vec<_> = t.items.iter().map(|r| (r.index, r.state, r.message.as_str())).collect();
         assert_eq!(rows, [(4, "done", ""), (5, "error", "ERROR: [youtube] Eb8yXfxT1hw: Video unavailable"), (6, "done", "")]);
         assert_eq!((ev.items_done, ev.items_failed, ev.items_total), (2, 1, 7));
-        assert_eq!(t.outcome(&mut ev, false, "x".into()), ("done", "1 of 7 failed".into()));
+        // trimmed: items 1–3 and 7 aren't replayed, so they count as never run (full live replay: "1 of 7 failed")
+        assert_eq!(t.outcome(&mut ev, false, "x".into()), ("done", "5 of 7 failed".into()));
         assert_eq!(ev.size, 7);
         let _ = std::fs::remove_dir_all(&d);
     }
@@ -588,6 +600,29 @@ mod tests {
         assert_eq!((r.index, r.title.as_str(), r.state, r.message.as_str()), (1, "A", "error", "Rate limited by YouTube. Retry later."));
         assert_eq!(t.items.len(), 1);
         assert_eq!(t.outcome(&mut ev, false, "ERROR: boom".into()), ("error", "ERROR: boom".into()));
+    }
+
+    #[test]
+    fn playlist_early_end_counts_never_run_items_as_failed() {
+        let (mut t, mut ev) = (Tracker::default(), update(true));
+        replay(&mut t, &mut ev, &lines(&["ytdown-item:1|5|P", "ytdown-file:/nonexistent/1.opus",
+            "ytdown-item:2|5|P", "E:ERROR: boom"]));
+        assert_eq!(t.outcome(&mut ev, false, "x".into()), ("done", "4 of 5 failed".into()));
+        assert_eq!(ev.items_failed, 4);
+        // exit 0 but items missing: not reported as a clean run either
+        let (mut t, mut ev) = (Tracker::default(), update(true));
+        replay(&mut t, &mut ev, &lines(&["ytdown-item:1|3|P", "ytdown-file:/nonexistent/1.opus"]));
+        assert_eq!(t.outcome(&mut ev, true, "x".into()), ("done", "2 of 3 failed".into()));
+    }
+
+    #[test]
+    fn playlist_unfinished_item_fails_when_next_starts() {
+        let (mut t, mut ev) = (Tracker::default(), update(true));
+        let rows = replay(&mut t, &mut ev, &lines(&["ytdown-item:1|2|P", "ytdown-title:A",
+            "ytdown: 40.0%|251|none|NA|NA", "ytdown-item:2|2|P"]));
+        let tail: Vec<_> = rows[rows.len() - 2..].iter().map(|r| (r.index, r.state, r.message.as_str())).collect();
+        assert_eq!(tail, [(1, "error", "Did not finish"), (2, "running", "")]);
+        assert_eq!((ev.items_done, ev.items_failed), (0, 1));
     }
 
     #[test]

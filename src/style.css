@@ -83,14 +83,15 @@ button { cursor: pointer; white-space: nowrap; }
   margin-bottom: 6px; background: var(--card); border: 1px solid var(--line); border-radius: 6px; }
 /* per-state colors: active = blue tint, done = green, failed = red, canceled = faded */
 #list li { border-left: 3px solid var(--line); }
-#list li[data-state="running"], #list li[data-state="queued"] { background: var(--info-bg); border-left-color: var(--accent); }
-#list li[data-state="done"] { border-left-color: var(--ok); }
-#list li[data-state="done"] .meta { color: var(--ok); }
+/* top-level rows only (">"), so a playlist's state never leaks into its item rows */
+#list > li[data-state="running"], #list > li[data-state="queued"] { background: var(--info-bg); border-left-color: var(--accent); }
+#list > li[data-state="done"] { border-left-color: var(--ok); }
+#list > li[data-state="done"] > .meta { color: var(--ok); }
 /* finished: no bar, muted title */
-#list li[data-state="done"] progress { display: none; }
-#list li[data-state="done"] .title { color: var(--faint); }
-#list li[data-state="error"] { background: var(--err-bg); border-left-color: var(--err); }
-#list li[data-state="canceled"] { opacity: .6; }
+#list > li[data-state="done"] > progress { display: none; }
+#list > li[data-state="done"] > .title { color: var(--faint); }
+#list > li[data-state="error"] { background: var(--err-bg); border-left-color: var(--err); }
+#list > li[data-state="canceled"] { opacity: .6; }
 /* cancel: small round icon button, quiet until hovered */
 #list .cancel { align-self: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%;
   background: transparent; color: var(--muted); font-size: 16px; line-height: 22px; text-align: center; }
@@ -115,6 +116,9 @@ button { cursor: pointer; white-space: nowrap; }
 #list .items li[data-state="running"] { border-left-color: var(--accent); }
 #list .items li[data-state="done"] { border-left-color: var(--ok); }
 #list .items li[data-state="error"] { border-left-color: var(--err); }
+#list .items li[data-state="done"] .meta { color: var(--ok); }
+/* finished/canceled items: muted title (no opacity, which would stack under a canceled playlist) */
+#list .items li:is([data-state="done"], [data-state="canceled"]) .title { color: var(--faint); }
 #list .items .title { font-weight: 400; font-size: 13px; }
 #list .items progress { height: 3px; }
 #list .items li:not([data-state="running"]) progress { display: none; }
