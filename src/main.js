@@ -12,6 +12,17 @@ function showErr(el, msg) {
 function flash(input, msg) {
   showErr(input.parentElement.querySelector(".err"), String(msg));
 }
+// ↑/↓ move between the playlist choices (wraps around); Tab is blocked; Esc cancels
+$("#playlist-dialog").addEventListener("keydown", (e) => {
+  if (e.key === "Tab") { e.preventDefault(); return; }
+  // explicit: don't rely on the WebView's native <dialog> Esc handling
+  if (e.key === "Escape") { e.preventDefault(); $("#playlist-dialog").close(""); return; }
+  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+  const opts = [...document.querySelectorAll("#playlist-dialog .opt")];
+  const i = opts.indexOf(document.activeElement);
+  e.preventDefault();
+  opts[(i + (e.key === "ArrowDown" ? 1 : -1) + opts.length) % opts.length].focus();
+});
 function askPlaylist() {
   const d = $("#playlist-dialog");
   return new Promise((resolve) => {
