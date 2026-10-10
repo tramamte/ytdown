@@ -8,9 +8,13 @@
     --accent: #6ea0ff; --err: #ff8a80; --warn: #ffcc66;
     --info-bg: #1e2a40; --err-bg: #3a2222; --warn-bg: #3a3020; --ok: #81c784; --brand: #ff4e45; --faint: #7a7a80; }
 }
+/* bundled UI font (Inter 4.1, SIL OFL — fonts/Inter-LICENSE.txt) so text looks the same on every OS;
+   glyphs Inter lacks (Korean/CJK titles, some symbols) fall back to the system font */
+@font-face { font-family: "Inter"; src: url("fonts/InterVariable.woff2") format("woff2");
+  font-weight: 100 900; font-style: normal; font-display: block; }
 * { box-sizing: border-box; }
 body { margin: 0; padding: 12px 16px; background: var(--bg); color: var(--fg);
-  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  font: 14px/1.4 "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
   /* fixed-height column: only the download list scrolls */
   height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 main { flex: 1; min-height: 0; display: flex; flex-direction: column; }

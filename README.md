@@ -49,5 +49,6 @@ rm -rf src-tauri/icons/{android,ios,Square*Logo.png,StoreLogo.png,64x64.png}
 ## License and legal
 
 - ffmpeg is licensed under the GPL; it is downloaded at runtime, not bundled.
+- The UI font is Inter (SIL Open Font License 1.1), bundled in `src/fonts/` with its license.
 - You are responsible for complying with YouTube's Terms of Service and with
   copyright law when downloading content.
