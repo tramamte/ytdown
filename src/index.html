@@ -1,1 +1,96 @@
-<!doctype html><title>ytdown</title><body>ytdown</body>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ytdown</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>ytdown</h1>
+    <button id="open-settings" aria-label="Settings" title="Settings">&#9881;</button>
+  </header>
+
+  <div id="banner" hidden>
+    <span id="banner-text"></span>
+    <button id="banner-retry" hidden>Retry</button>
+    <button id="banner-close" hidden aria-label="Dismiss">&times;</button>
+  </div>
+  <div id="notice" hidden>
+    <span id="notice-text"></span>
+    <button id="notice-close" aria-label="Dismiss">&times;</button>
+  </div>
+
+  <main>
+    <div class="field">
+      <label for="video">Video URL</label>
+      <input id="video" class="url" data-kind="video" type="url" placeholder="Paste a YouTube link and press Enter" disabled>
+      <p class="err" hidden></p>
+    </div>
+    <div class="field">
+      <label for="audio">Audio URL</label>
+      <input id="audio" class="url" data-kind="audio" type="url" placeholder="Paste a YouTube link and press Enter" disabled>
+      <p class="err" hidden></p>
+    </div>
+
+    <div class="list-head">
+      <h2>Downloads</h2>
+      <button id="clear">Clear finished</button>
+    </div>
+    <ul id="list"></ul>
+  </main>
+
+  <dialog id="playlist-dialog">
+    <form method="dialog">
+      <p>This link is part of a playlist.</p>
+      <div class="row">
+        <button value="single">This video only</button>
+        <button value="all">Whole playlist</button>
+        <button value="">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="settings-dialog">
+    <form id="settings-form" method="dialog">
+      <h2>Settings</h2>
+      <p id="shortcut-note" class="err" hidden></p>
+      <label for="s-dir">Download folder</label>
+      <div class="row">
+        <input id="s-dir" readonly>
+        <button type="button" id="s-choose">Choose…</button>
+      </div>
+      <label for="s-quality">Quality</label>
+      <select id="s-quality">
+        <option value="">Best</option>
+        <option>2160</option><option>1440</option><option>1080</option>
+        <option>720</option><option>480</option><option>360</option>
+      </select>
+      <label for="s-container">Video container</label>
+      <select id="s-container">
+        <option value="mp4">MP4</option><option value="mkv">MKV</option><option value="webm">WebM</option>
+      </select>
+      <label for="s-audio">Audio format</label>
+      <select id="s-audio">
+        <option value="mp3">MP3</option><option value="m4a">M4A</option>
+        <option value="opus">Opus</option><option value="flac">FLAC</option><option value="wav">WAV</option>
+      </select>
+      <label for="s-shortcut">Global shortcut</label>
+      <input id="s-shortcut" placeholder="CommandOrControl+Shift+Y">
+      <div class="row">
+        <button type="button" id="s-deps">Update dependencies</button>
+      </div>
+      <p id="s-err" class="err" hidden></p>
+      <p class="about">ffmpeg is licensed under GPL. Downloading YouTube content may violate YouTube's Terms of Service; you are responsible for how you use this app.</p>
+      <p class="about" id="mac-note" hidden>The global shortcut may require Accessibility permission (System Settings → Privacy &amp; Security → Accessibility).</p>
+      <div class="row end">
+        <button type="button" id="s-cancel">Close</button>
+        <button id="s-save" value="save">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="main.js"></script>
+</body>
+</html>
