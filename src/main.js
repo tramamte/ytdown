@@ -97,6 +97,8 @@ const fill = (s) => {
   $("#s-quality").value = s.quality ?? "";
   $("#s-container").value = s.container;
   $("#s-audio").value = s.audio_format;
+  $("#s-codec").value = s.video_codec;
+  $("#s-aq").value = s.audio_quality;
   $("#s-shortcut").value = s.shortcut;
 };
 $("#mac-note").hidden = !navigator.userAgent.includes("Mac");
@@ -112,7 +114,8 @@ $("#settings-form").addEventListener("submit", async (e) => {
   const err = $("#s-err");
   const q = $("#s-quality").value;
   const s = { ...current, download_dir: $("#s-dir").value, quality: q ? Number(q) : null,
-    container: $("#s-container").value, audio_format: $("#s-audio").value };
+    container: $("#s-container").value, audio_format: $("#s-audio").value,
+    video_codec: $("#s-codec").value, audio_quality: $("#s-aq").value };
   try {
     await invoke("save_settings", { s });
     const accel = $("#s-shortcut").value.trim();

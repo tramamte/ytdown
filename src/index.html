@@ -71,11 +71,22 @@
       <select id="s-container">
         <option value="mp4">MP4</option><option value="mkv">MKV</option><option value="webm">WebM</option>
       </select>
+      <label for="s-codec">Video codec</label>
+      <select id="s-codec">
+        <option value="auto">Auto (best available)</option><option value="h264">H.264 (most compatible)</option>
+        <option value="vp9">VP9</option><option value="av1">AV1</option>
+      </select>
       <label for="s-audio">Audio format</label>
       <select id="s-audio">
         <option value="mp3">MP3</option><option value="m4a">M4A</option>
         <option value="opus">Opus</option><option value="flac">FLAC</option><option value="wav">WAV</option>
       </select>
+      <label for="s-aq">Audio quality</label>
+      <select id="s-aq">
+        <option value="best">Best</option><option value="320k">320 kbps</option>
+        <option value="192k">192 kbps</option><option value="128k">128 kbps</option>
+      </select>
+      <p class="about">Applies to MP3, M4A and Opus</p>
       <label for="s-shortcut">Global shortcut</label>
       <input id="s-shortcut" placeholder="CommandOrControl+Shift+Y">
       <div class="row">

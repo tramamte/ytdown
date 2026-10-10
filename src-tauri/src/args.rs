@@ -30,8 +30,15 @@ pub fn build(kind: Kind, url: &str, playlist: bool, s: &Settings, ffmpeg: &Path,
                 Some(h) => format!("bv*[height<={h}]+ba/b[height<={h}]"),
             };
             a.extend(["-f".into(), f, "--merge-output-format".into(), s.container.clone()]);
+            if s.video_codec != "auto" {
+                let tok = if s.video_codec == "av1" { "av01" } else { s.video_codec.as_str() };
+                a.extend(["-S".into(), format!("vcodec:{tok}")]);
+            }
         }
-        Kind::Audio => a.extend(["-x".into(), "--audio-format".into(), s.audio_format.clone()]),
+        Kind::Audio => {
+            let q = match s.audio_quality.as_str() { "best" => "0".to_string(), v => v.to_uppercase() };
+            a.extend(["-x".into(), "--audio-format".into(), s.audio_format.clone(), "--audio-quality".into(), q]);
+        }
     }
     // "--" stops option parsing so a URL can never be read as a flag
     a.extend(["--".into(), url.into()]);
@@ -75,5 +82,14 @@ mod tests {
         assert!(a.windows(2).any(|w| w == ["--audio-format", "mp3"]));
         assert!(a.contains(&"--progress".to_string()));
         assert!(has_pair(&a, ["--js-runtimes", "deno:/deno"]));
+    }
+    #[test]
+    fn codec_and_audio_quality() {
+        let b = |k, st: &Settings| build(k, "u", false, st, Path::new("/ff"), Path::new("/deno"), Path::new("/t"));
+        assert!(!b(Kind::Video, &s()).contains(&"-S".to_string()));
+        let mut st = s(); st.video_codec = "av1".into(); st.audio_quality = "192k".into();
+        assert!(has_pair(&b(Kind::Video, &st), ["-S", "vcodec:av01"]));
+        assert!(has_pair(&b(Kind::Audio, &s()), ["--audio-quality", "0"]));
+        assert!(has_pair(&b(Kind::Audio, &st), ["--audio-quality", "192K"]));
     }
 }

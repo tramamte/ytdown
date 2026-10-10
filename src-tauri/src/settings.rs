@@ -9,12 +9,20 @@ pub struct Settings {
     pub container: String,    // mp4 | mkv | webm
     pub audio_format: String, // mp3 | m4a | opus | ...
     pub shortcut: String,
+    #[serde(default = "default_codec")]
+    pub video_codec: String,  // auto | h264 | vp9 | av1
+    #[serde(default = "default_audio_quality")]
+    pub audio_quality: String, // best | 320k | 192k | 128k
 }
+
+fn default_codec() -> String { "auto".into() }
+fn default_audio_quality() -> String { "best".into() }
 
 impl Settings {
     pub fn new(download_dir: PathBuf) -> Self {
         Self { download_dir, quality: None, container: "mp4".into(),
-               audio_format: "mp3".into(), shortcut: "CommandOrControl+Shift+Y".into() }
+               audio_format: "mp3".into(), shortcut: "CommandOrControl+Shift+Y".into(),
+               video_codec: default_codec(), audio_quality: default_audio_quality() }
     }
 }
 
@@ -40,6 +48,12 @@ pub fn validate(s: &Settings) -> Result<(), String> {
     }
     if !["mp3", "m4a", "opus", "flac", "wav"].contains(&s.audio_format.as_str()) {
         return Err(format!("audio_format: unsupported value {:?}", s.audio_format));
+    }
+    if !["auto", "h264", "vp9", "av1"].contains(&s.video_codec.as_str()) {
+        return Err(format!("video_codec: unsupported value {:?}", s.video_codec));
+    }
+    if !["best", "320k", "192k", "128k"].contains(&s.audio_quality.as_str()) {
+        return Err(format!("audio_quality: unsupported value {:?}", s.audio_quality));
     }
     if !matches!(s.quality, None | Some(2160 | 1440 | 1080 | 720 | 480 | 360)) {
         return Err("quality: unsupported value".into());
@@ -74,6 +88,20 @@ mod tests {
         err(Settings { download_dir: "relative".into(), ..ok() }, "download_dir");
         err(Settings { download_dir: std::env::temp_dir().join("ytdown-nope-xyz"), ..ok() }, "download_dir");
         err(Settings { shortcut: "".into(), ..ok() }, "shortcut");
+    }
+
+    #[test]
+    fn invalid_codec_and_audio_quality() {
+        err(Settings { video_codec: "hevc".into(), ..ok() }, "video_codec");
+        err(Settings { audio_quality: "64k".into(), ..ok() }, "audio_quality");
+    }
+
+    #[test]
+    fn legacy_json_gets_defaults() {
+        let s: Settings = serde_json::from_str(
+            r#"{"download_dir":"/dl","quality":720,"container":"mkv","audio_format":"m4a","shortcut":"X"}"#).unwrap();
+        assert_eq!((s.quality, s.container.as_str(), s.audio_format.as_str()), (Some(720), "mkv", "m4a"));
+        assert_eq!((s.video_codec.as_str(), s.audio_quality.as_str()), ("auto", "best"));
     }
 
     #[test]
