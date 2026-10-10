@@ -278,6 +278,11 @@ document.addEventListener("keydown", (e) => {
 });
 $("#audio-hint").textContent = MAC ? "⌘⇧A toggle · ⇧↩ audio once" : "Ctrl+⇧A toggle · ⇧Enter once";
 
+// ---- right-click menu only in editable text fields (paste/cut); blocks Reload/Inspect elsewhere ----
+document.addEventListener("contextmenu", (e) => {
+  if (!e.target.matches("input.url")) e.preventDefault();
+});
+
 // ---- startup (listeners first, then settings, shortcut, deps) ----
 (async () => {
   await listen("deps://status", ({ payload }) => setBanner(payload));
