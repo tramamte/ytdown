@@ -95,7 +95,7 @@ button { cursor: pointer; white-space: nowrap; }
 #list progress { grid-column: 1 / -1; width: 100%; height: 6px; -webkit-appearance: none; appearance: none; border: 0; border-radius: 3px;
   background: var(--line); overflow: hidden; }
 #list progress::-webkit-progress-bar { background: var(--line); border-radius: 3px; }
-#list progress::-webkit-progress-value { background: var(--accent); border-radius: 3px; transition: width .3s; }
+#list progress::-webkit-progress-value { background: var(--accent); border-radius: 3px; }
 #list li[data-state="done"] progress::-webkit-progress-value { background: var(--ok); }
 #list .msg { grid-column: 1 / -1; color: var(--err); font-size: 12px; }
 dialog { max-height: calc(100vh - 24px); overflow-y: auto; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 10px;

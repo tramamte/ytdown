@@ -65,7 +65,13 @@ function render(u) {
   li.dataset.state = u.state;
   li.querySelector(".title").textContent = u.title || "(untitled)";
   const label = u.state === "done" && u.size > 0 ? formatSize(u.size) : LABEL[u.state] || u.state;
-  li.querySelector(".meta").textContent = `${u.kind === "audio" ? "Audio" : "Video"} · ${label}`;
+  const kind = u.kind === "audio" ? "Audio" : "Video";
+  let detail = label;
+  if (u.state === "running") {
+    const pct = `${Math.round(u.percent || 0)}%`;
+    detail = u.stages > 1 ? `${u.stream === "audio" ? "Audio" : "Video"} ${u.stage}/${u.stages} · ${pct}` : pct;
+  }
+  li.querySelector(".meta").textContent = `${kind} · ${detail}`;
   const p = li.querySelector("progress");
   if (u.state === "queued") p.removeAttribute("value");
   else p.value = u.state === "done" ? 100 : u.percent || 0;

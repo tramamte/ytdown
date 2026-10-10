@@ -37,6 +37,9 @@ struct Update {
     percent: f32,
     message: String,
     size: u64, // bytes of the finished files; 0 until done or if unknown
+    stage: u32, // 1-based index of the stream being downloaded; 0 if unknown
+    stages: u32, // number of streams of the item; 0 if unknown
+    stream: &'static str, // "video" | "audio" | "" if unknown
 }
 
 #[tauri::command]
@@ -56,7 +59,7 @@ pub fn start_download(app: AppHandle, state: State<'_, Manager>, url: String, ki
     let tok = CancellationToken::new();
     state.jobs.lock().unwrap().insert(id, tok.clone());
     let url = url.trim().to_string();
-    let ev = Update { id, title: url.clone(), kind, state: "queued", percent: 0.0, message: String::new(), size: 0 };
+    let ev = Update { id, title: url.clone(), kind, state: "queued", percent: 0.0, message: String::new(), size: 0, stage: 0, stages: 0, stream: "" };
     tauri::async_runtime::spawn(run_job(app, state.sem.clone(), tok, ev, url, playlist));
     Ok(id)
 }
@@ -154,6 +157,7 @@ async fn run(app: &AppHandle, tok: &CancellationToken, ev: &mut Update, a: &[Str
     let mut tail: Vec<String> = Vec::new();
     let (mut out_lines, mut spoke) = (0, false);
     let mut files: Vec<String> = Vec::new();
+    let mut formats: Vec<String> = Vec::new();
 
     // drain both pipes concurrently (a full pipe would block yt-dlp), then reap
     let status = loop {
@@ -163,7 +167,14 @@ async fn run(app: &AppHandle, tok: &CancellationToken, ev: &mut Update, a: &[Str
                     out_lines += 1;
                     match progress::parse(&decode(&ob)) {
                         Some(Line::Title(t)) => { ev.title = t; emit(app, ev) }
-                        Some(Line::Percent(p)) => { ev.percent = p; emit(app, ev) }
+                        Some(Line::Formats(f)) => formats = f,
+                        Some(Line::Progress { percent, format_id, is_video }) => {
+                            ev.percent = percent;
+                            ev.stage = formats.iter().position(|f| *f == format_id).map_or(0, |i| i as u32 + 1);
+                            ev.stages = formats.len() as u32;
+                            ev.stream = if is_video { "video" } else { "audio" };
+                            emit(app, ev)
+                        }
                         Some(Line::File(f)) => files.push(f),
                         None => {}
                     }
