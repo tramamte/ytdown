@@ -1,4 +1,8 @@
 #[allow(dead_code)] // consumed by download flow in Task 6
+mod args;
+#[allow(dead_code)] // consumed by commands in Task 7
+mod settings;
+#[allow(dead_code)] // consumed by download flow in Task 6
 mod progress;
 #[allow(dead_code)] // consumed by download flow in Task 6
 mod url;
