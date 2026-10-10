@@ -103,9 +103,13 @@ async fn job(app: &AppHandle, sem: &Arc<Semaphore>, tok: &CancellationToken, ev:
     }
     let s = settings::load(app);
     let a = args::build(ev.kind, url, playlist, &s, &deps::ffmpeg_path(app), &deps::deno_path(app), tmp);
-    let mut child = match deps::command(&deps::ytdlp_path(app)).args(a)
+    let mut cmd = deps::command(&deps::ytdlp_path(app));
+    // own process group so cancel reaches the PyInstaller launcher's real yt-dlp child (and ffmpeg)
+    #[cfg(unix)]
+    cmd.process_group(0);
+    let mut child = match cmd.args(a)
         .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped())
-        .kill_on_drop(true).spawn() {
+        .kill_on_drop(true).spawn() { // kill_on_drop: last-resort fallback (launcher only)
         Ok(c) => c,
         Err(e) => return ("error", format!("Failed to start yt-dlp: {e}")),
     };
@@ -145,7 +149,7 @@ async fn job(app: &AppHandle, sem: &Arc<Semaphore>, tok: &CancellationToken, ev:
             },
             s = child.wait(), if out_done && err_done => break s,
             _ = tok.cancelled() => {
-                let _ = child.kill().await;
+                kill_tree(&mut child).await;
                 return CANCELED;
             }
         }
@@ -155,6 +159,28 @@ async fn job(app: &AppHandle, sem: &Arc<Semaphore>, tok: &CancellationToken, ev:
         Ok(s) => ("error", failure_message(&tail, s.code())),
         Err(e) => ("error", e.to_string()),
     }
+}
+
+/// Kills `child` and all its descendants, then reaps it.
+/// Unix: SIGTERM the group first so the PyInstaller bootloader can remove its `_MEI*` dir.
+async fn kill_tree(child: &mut tokio::process::Child) {
+    let Some(pid) = child.id() else { return }; // already reaped
+    #[cfg(unix)]
+    {
+        let group = |sig: &'static str| {
+            let g = format!("-{pid}");
+            async move { let _ = deps::command(Path::new("kill")).args([sig, "--", &g]).status().await; }
+        };
+        group("-TERM").await;
+        if tokio::time::timeout(std::time::Duration::from_secs(3), child.wait()).await.is_ok() {
+            return;
+        }
+        group("-KILL").await; // launcher still unreaped here, so the pgid cannot be reused yet
+    }
+    #[cfg(windows)]
+    let _ = deps::command(Path::new("taskkill")).args(["/T", "/F", "/PID", &pid.to_string()]).status().await;
+    let _ = child.start_kill(); // fails harmlessly if already dead
+    let _ = child.wait().await;
 }
 
 fn decode(line: &[u8]) -> String {
@@ -182,6 +208,27 @@ mod tests {
         let p: Vec<_> = futures_util::future::join_all((0..3).map(|_| m.sem.clone().acquire_owned())).await;
         assert_eq!(p.len(), 3);
         assert!(m.sem.clone().try_acquire_owned().is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn kill_tree_kills_grandchildren() {
+        let mut cmd = deps::command(Path::new("sh"));
+        cmd.process_group(0);
+        let mut child = cmd.args(["-c", "sleep 30 & echo $!; wait"]).stdout(Stdio::piped()).spawn().unwrap();
+        let mut line = String::new();
+        BufReader::new(child.stdout.take().unwrap()).read_line(&mut line).await.unwrap();
+        let alive = |p: &str| std::process::Command::new("kill").args(["-0", p]).status().unwrap().success();
+        let gc = line.trim().to_string();
+        assert!(alive(&gc));
+        kill_tree(&mut child).await;
+        assert!(child.try_wait().unwrap().is_some());
+        // the orphaned grandchild is reaped by init/launchd; give it a moment
+        for _ in 0..50 {
+            if !alive(&gc) { return; }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("grandchild {gc} survived");
     }
 
     #[test]
