@@ -114,5 +114,5 @@ Tauri v2를 사용한다. 공식 번들러와 CI 액션으로 3개 OS 설치 파
 - [ ] 동시 다운로드 상한 3에서 YouTube 속도 제한(HTTP 429) 발생 여부 및 상한 적정성
 - [ ] ffmpeg 라이선스(GPL) 및 YouTube 약관 고지 문구 법무 검토 (앱 설정 화면과 README에 문구 반영됨)
 - [x] 4개 대상 빌드 검증: GitHub Actions에서 macOS arm64·x86_64, Windows, Ubuntu 22.04 모두 성공 (v0.1.0, 미서명)
-- [ ] Windows/Ubuntu 실제 설치·실행 검증 (의존성 설치, 다운로드, 단축키, 취소)
+- [ ] Windows/Ubuntu 실제 설치·실행 검증 (의존성 설치, 다운로드, 단축키, 취소) — Windows는 v0.1.1에서 PO가 실행·다운로드 확인, Ubuntu 미검증
 - [ ] macOS 공증·Windows 코드 서명 인증서 준비
