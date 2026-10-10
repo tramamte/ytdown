@@ -109,29 +109,39 @@ async fn job(app: &AppHandle, sem: &Arc<Semaphore>, tok: &CancellationToken, ev:
         Ok(c) => c,
         Err(e) => return ("error", format!("Failed to start yt-dlp: {e}")),
     };
-    let mut out = BufReader::new(child.stdout.take().expect("piped stdout")).lines();
-    let mut err = BufReader::new(child.stderr.take().expect("piped stderr")).lines();
+    let mut out = BufReader::new(child.stdout.take().expect("piped stdout"));
+    let mut err = BufReader::new(child.stderr.take().expect("piped stderr"));
     let (mut out_done, mut err_done) = (false, false);
+    // read raw bytes: yt-dlp may emit non-UTF-8 (locale code page on Windows) and a
+    // decode error must never stop draining. Buffers persist across select! iterations
+    // because read_until keeps partially read bytes in them when cancelled.
+    let (mut ob, mut eb) = (Vec::new(), Vec::new());
     let mut tail: Vec<String> = Vec::new();
 
     // drain both pipes concurrently (a full pipe would block yt-dlp), then reap
     let status = loop {
         tokio::select! {
-            l = out.next_line(), if !out_done => match l {
-                Ok(Some(l)) => match progress::parse(&l) {
-                    Some(Line::Title(t)) => { ev.title = t; emit(app, ev) }
-                    Some(Line::Percent(p)) => { ev.percent = p; emit(app, ev) }
-                    None => {}
-                },
-                _ => out_done = true,
-            },
-            l = err.next_line(), if !err_done => match l {
-                Ok(Some(l)) if !l.trim().is_empty() => {
-                    if tail.len() == 5 { tail.remove(0); }
-                    tail.push(l);
+            r = out.read_until(b'\n', &mut ob), if !out_done => match r {
+                Ok(n) if n > 0 => {
+                    match progress::parse(&decode(&ob)) {
+                        Some(Line::Title(t)) => { ev.title = t; emit(app, ev) }
+                        Some(Line::Percent(p)) => { ev.percent = p; emit(app, ev) }
+                        None => {}
+                    }
+                    ob.clear();
                 }
-                Ok(Some(_)) => {}
-                _ => err_done = true,
+                _ => out_done = true, // EOF or real I/O error
+            },
+            r = err.read_until(b'\n', &mut eb), if !err_done => match r {
+                Ok(n) if n > 0 => {
+                    let l = decode(&eb);
+                    eb.clear();
+                    if !l.trim().is_empty() {
+                        if tail.len() == 5 { tail.remove(0); }
+                        tail.push(l);
+                    }
+                }
+                _ => err_done = true, // EOF or real I/O error
             },
             s = child.wait(), if out_done && err_done => break s,
             _ = tok.cancelled() => {
@@ -145,6 +155,10 @@ async fn job(app: &AppHandle, sem: &Arc<Semaphore>, tok: &CancellationToken, ev:
         Ok(s) => ("error", failure_message(&tail, s.code())),
         Err(e) => ("error", e.to_string()),
     }
+}
+
+fn decode(line: &[u8]) -> String {
+    String::from_utf8_lossy(line).trim_end_matches(['\r', '\n']).to_string()
 }
 
 fn failure_message(tail: &[String], code: Option<i32>) -> String {
@@ -168,6 +182,13 @@ mod tests {
         let p: Vec<_> = futures_util::future::join_all((0..3).map(|_| m.sem.clone().acquire_owned())).await;
         assert_eq!(p.len(), 3);
         assert!(m.sem.clone().try_acquire_owned().is_err());
+    }
+
+    #[test]
+    fn decodes_lossy_lines() {
+        assert_eq!(decode(b"ytdown: 42.3%\r\n"), "ytdown: 42.3%");
+        assert_eq!(decode(b"ytdown-title:\xc7\xd1 x\n"), "ytdown-title:\u{FFFD}\u{FFFD} x");
+        assert_eq!(decode(b"no newline"), "no newline");
     }
 
     #[test]

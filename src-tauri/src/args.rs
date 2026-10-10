@@ -9,6 +9,8 @@ pub enum Kind { Video, Audio }
 pub fn build(kind: Kind, url: &str, playlist: bool, s: &Settings, ffmpeg: &Path, deno: &Path, tmp: &Path) -> Vec<String> {
     let mut a: Vec<String> = vec![
         "--newline".into(), "--no-colors".into(),
+        // pipes otherwise use the locale code page on Windows (garbles non-ASCII titles)
+        "--encoding".into(), "utf-8".into(),
         // --print implies --quiet, which would suppress progress lines
         "--progress".into(),
         "--progress-template".into(), "download:ytdown:%(progress._percent_str)s".into(),
@@ -52,6 +54,7 @@ mod tests {
         assert!(a.contains(&"--progress".to_string()));
         assert!(has_pair(&a, ["--js-runtimes", "deno:/deno"]));
         assert!(has_pair(&a, ["-o", "%(title)s.%(ext)s"]));
+        assert!(has_pair(&a, ["--encoding", "utf-8"]));
         assert_eq!(&a[a.len() - 2..], ["--", "https://youtu.be/x"]);
     }
     #[test]
