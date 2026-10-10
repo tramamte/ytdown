@@ -82,6 +82,9 @@ button { cursor: pointer; white-space: nowrap; }
 #list li[data-state="running"], #list li[data-state="queued"] { background: var(--info-bg); border-left-color: var(--accent); }
 #list li[data-state="done"] { border-left-color: var(--ok); }
 #list li[data-state="done"] .meta { color: var(--ok); }
+/* finished: no bar, muted title */
+#list li[data-state="done"] progress { display: none; }
+#list li[data-state="done"] .title { color: var(--muted); }
 #list li[data-state="error"] { background: var(--err-bg); border-left-color: var(--err); }
 #list li[data-state="canceled"] { opacity: .6; }
 #list .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
@@ -96,7 +99,6 @@ button { cursor: pointer; white-space: nowrap; }
   background: var(--line); overflow: hidden; }
 #list progress::-webkit-progress-bar { background: var(--line); border-radius: 3px; }
 #list progress::-webkit-progress-value { background: var(--accent); border-radius: 3px; }
-#list li[data-state="done"] progress::-webkit-progress-value { background: var(--ok); }
 #list .msg { grid-column: 1 / -1; color: var(--err); font-size: 12px; }
 dialog { max-height: calc(100vh - 24px); overflow-y: auto; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 10px;
   width: min(460px, 92vw); padding: 16px; }
