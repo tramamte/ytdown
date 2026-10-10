@@ -24,12 +24,14 @@ function askPlaylist() {
 // ---- banner / notice ----
 function setBanner({ state, message }) {
   const b = $("#banner");
-  b.className = state === "error" ? "error" : state === "ready" ? "warn" : "info";
+  const usable = state === "ready" || state === "update";
+  // "notice": blue callout without the spinner (base #banner style)
+  b.className = state === "error" ? "error" : state === "ready" ? "warn" : state === "update" ? "notice" : "info";
   b.hidden = state === "ready" && !message;
   $("#banner-text").textContent = message || "";
   $("#banner-retry").hidden = state !== "error";
-  $("#banner-close").hidden = state !== "ready";
-  document.querySelectorAll(".url").forEach((i) => (i.disabled = state !== "ready"));
+  $("#banner-close").hidden = !usable;
+  document.querySelectorAll(".url").forEach((i) => (i.disabled = !usable));
 }
 $("#banner-retry").onclick = () => invoke("ensure_deps").catch(() => {});
 $("#banner-close").onclick = () => ($("#banner").hidden = true);

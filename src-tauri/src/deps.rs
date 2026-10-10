@@ -4,12 +4,14 @@ use sha2::{Digest, Sha256};
 use std::env::consts::{ARCH, EXE_SUFFIX, OS};
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::AsyncWriteExt;
 
 const YTDLP_BASE: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/";
+const YTDLP_API: &str = "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest";
 const DENO_BASE: &str = "https://github.com/denoland/deno/releases/latest/download/";
 const BTBN_BASE: &str = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/";
 const UNSUPPORTED: &str = "Unsupported platform";
@@ -67,7 +69,8 @@ struct Source {
     entry: Option<String>,
 }
 
-fn ytdlp_source() -> Result<Source, String> {
+/// `base` is a release download URL ending in `/`.
+fn ytdlp_source(base: &str) -> Result<Source, String> {
     let asset = match (OS, ARCH) {
         ("macos", _) => "yt-dlp_macos",
         ("windows", "x86_64") => "yt-dlp.exe",
@@ -75,8 +78,8 @@ fn ytdlp_source() -> Result<Source, String> {
         _ => return Err(UNSUPPORTED.into()),
     };
     Ok(Source {
-        url: format!("{YTDLP_BASE}{asset}"),
-        check: Check::Listed { sums_url: format!("{YTDLP_BASE}SHA2-256SUMS"), asset: asset.into() },
+        url: format!("{base}{asset}"),
+        check: Check::Listed { sums_url: format!("{base}SHA2-256SUMS"), asset: asset.into() },
         entry: None,
     })
 }
@@ -120,6 +123,7 @@ fn client() -> &'static reqwest::Client {
     C.get_or_init(|| reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(15))
         .read_timeout(Duration::from_secs(60))
+        .user_agent("ytdown") // required by the GitHub API
         .build().expect("http client"))
 }
 
@@ -232,10 +236,71 @@ async fn runs_ok(path: &Path, arg: &str) -> bool {
     path.exists() && command(path).arg(arg).output().await.is_ok_and(|o| o.status.success())
 }
 
-async fn self_update(ytdlp: &Path) -> bool {
-    command(ytdlp).arg("-U").output().await.is_ok_and(|o| {
-        o.status.success() && !String::from_utf8_lossy(&[o.stdout, o.stderr].concat()).contains("ERROR")
-    })
+/// Trimmed `--version` stdout, if the binary runs.
+async fn version(path: &Path) -> Option<String> {
+    if !path.exists() { return None; }
+    let o = command(path).arg("--version").output().await.ok()?;
+    o.status.success().then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
+}
+
+/// Dotted numeric versions (yt-dlp `2026.08.19`, hotfix `2022.06.22.1`); unparseable = not newer.
+fn is_newer(installed: &str, latest: &str) -> bool {
+    let parse = |v: &str| v.trim().split('.').map(str::parse::<u64>).collect::<Result<Vec<_>, _>>().ok();
+    matches!((parse(installed), parse(latest)), (Some(a), Some(b)) if b > a)
+}
+
+fn parse_tag(body: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(body).ok()?["tag_name"].as_str().map(str::to_string)
+}
+
+/// Where an update for `bin` is staged until the next launch.
+fn pending_path(bin: &Path) -> PathBuf {
+    bin.with_file_name("pending").join(bin.file_name().expect("binary file name"))
+}
+
+/// Moves a staged update over `bin`. On failure the staged file is dropped.
+fn apply_pending(bin: &Path) {
+    let pending = pending_path(bin);
+    if !pending.exists() { return; }
+    if let Err(e) = std::fs::rename(&pending, bin) {
+        log::warn!("Could not apply staged update {}: {e}", pending.display());
+        let _ = std::fs::remove_file(&pending);
+    }
+}
+
+/// Stages a newer yt-dlp in `pending/`. Returns the staged version, or None if up to date.
+async fn stage_update(app: &AppHandle) -> Result<Option<String>, String> {
+    let ytdlp = ytdlp_path(app);
+    let latest = parse_tag(&fetch_text(YTDLP_API).await?).ok_or("No tag_name in yt-dlp release info")?;
+    let installed = version(&ytdlp).await.ok_or("yt-dlp does not run")?;
+    if !is_newer(&installed, &latest) { return Ok(None); }
+    let pending = pending_path(&ytdlp);
+    if version(&pending).await.as_deref() != Some(latest.as_str()) {
+        std::fs::create_dir_all(pending.parent().expect("pending dir")).map_err(|e| e.to_string())?;
+        let base = format!("https://github.com/yt-dlp/yt-dlp/releases/download/{latest}/");
+        install("yt-dlp", ytdlp_source(&base)?, &pending).await?;
+    }
+    Ok(Some(latest))
+}
+
+static CHECKING: AtomicBool = AtomicBool::new(false);
+
+/// Background update check; a request while one runs is a no-op. Never blocks input.
+fn spawn_update_check(app: &AppHandle) {
+    if CHECKING.swap(true, Ordering::SeqCst) { return; }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        match stage_update(&app).await {
+            Ok(Some(v)) => emit(&app, "update",
+                &format!("yt-dlp {v} downloaded; it will be applied the next time you start ytdown.")),
+            Ok(None) => {}
+            Err(e) => {
+                log::warn!("yt-dlp update check failed: {e}");
+                emit(&app, "ready", "Could not check for yt-dlp updates; using installed version.");
+            }
+        }
+        CHECKING.store(false, Ordering::SeqCst);
+    });
 }
 
 #[derive(Serialize, Clone)]
@@ -254,27 +319,22 @@ static RUNNING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 pub async fn ensure_deps(app: AppHandle) -> Result<(), String> {
     let _guard = RUNNING.lock().await; // concurrent callers wait, then re-run
     match ensure(&app).await {
-        Ok(warning) => { emit(&app, "ready", &warning); Ok(()) }
+        Ok(()) => { emit(&app, "ready", ""); spawn_update_check(&app); Ok(()) }
         Err(e) => { emit(&app, "error", &e); Err(e) }
     }
 }
 
-/// Returns a warning message (empty if none).
-async fn ensure(app: &AppHandle) -> Result<String, String> {
+static APPLIED: AtomicBool = AtomicBool::new(false);
+
+async fn ensure(app: &AppHandle) -> Result<(), String> {
     std::fs::create_dir_all(bin_dir(app)).map_err(|e| e.to_string())?;
-    let mut warning = String::new();
-    let ytdlp = ytdlp_path(app);
-    if runs_ok(&ytdlp, "--version").await {
-        emit(app, "working", "Updating yt-dlp…");
-        if !self_update(&ytdlp).await {
-            warning = "Could not check for yt-dlp updates; using installed version.".into();
-        }
-    } else {
-        emit(app, "working", "Downloading yt-dlp…");
-        install("yt-dlp", ytdlp_source()?, &ytdlp).await?;
+    // Only on the first call (launch): later calls must not swap a binary that may be running.
+    if !APPLIED.swap(true, Ordering::SeqCst) {
+        apply_pending(&ytdlp_path(app));
     }
     for (name, path, arg, source) in [
-        ("ffmpeg", ffmpeg_path(app), "-version", ffmpeg_source as fn() -> Result<Source, String>),
+        ("yt-dlp", ytdlp_path(app), "--version", (|| ytdlp_source(YTDLP_BASE)) as fn() -> Result<Source, String>),
+        ("ffmpeg", ffmpeg_path(app), "-version", ffmpeg_source),
         ("deno", deno_path(app), "--version", deno_source),
     ] {
         if !runs_ok(&path, arg).await {
@@ -282,7 +342,7 @@ async fn ensure(app: &AppHandle) -> Result<String, String> {
             install(name, source()?, &path).await?;
         }
     }
-    Ok(warning)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -326,8 +386,41 @@ mod tests {
     }
 
     #[test]
+    fn newer_version() {
+        assert!(is_newer("2026.07.04", "2026.08.19"));
+        assert!(is_newer("2026.08.19", "2026.08.19.1"));
+        assert!(is_newer("2025.12.08", "2026.01.29"));
+        assert!(!is_newer("2026.08.19", "2026.08.19"));
+        assert!(!is_newer("2026.08.19\n", "2026.08.19"));
+        assert!(!is_newer("2026.08.19.1", "2026.08.19"));
+        assert!(!is_newer("2026.08.19", "garbage"));
+    }
+
+    #[test]
+    fn tag_from_release_json() {
+        assert_eq!(parse_tag(r#"{"url":"x","tag_name":"2026.08.19","name":"yt-dlp"}"#).as_deref(), Some("2026.08.19"));
+        assert_eq!(parse_tag(r#"{"message":"API rate limit exceeded"}"#), None);
+        assert_eq!(parse_tag("not json"), None);
+    }
+
+    #[test]
+    fn applies_pending_binary() {
+        let dir = std::env::temp_dir().join(format!("ytdown-pending-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("pending")).unwrap();
+        let bin = dir.join("yt-dlp");
+        std::fs::write(&bin, "old").unwrap();
+        apply_pending(&bin); // absent -> no-op
+        assert_eq!(std::fs::read_to_string(&bin).unwrap(), "old");
+        std::fs::write(pending_path(&bin), "new").unwrap();
+        apply_pending(&bin);
+        assert_eq!(std::fs::read_to_string(&bin).unwrap(), "new");
+        assert!(!pending_path(&bin).exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn sources_for_current_platform() {
-        for src in [ytdlp_source(), ffmpeg_source(), deno_source()] {
+        for src in [ytdlp_source(YTDLP_BASE), ffmpeg_source(), deno_source()] {
             assert!(src.unwrap().url.starts_with("https://"));
         }
     }
