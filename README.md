@@ -33,6 +33,19 @@ npx tauri dev
 npx tauri build
 ```
 
+## Icons
+
+Two sources: `app-icon.png` (rounded, transparent margin — Windows/Linux and the in-app logo)
+and `app-icon-mac.png` (full-bleed square; macOS applies its own mask). To regenerate:
+
+```
+npx tauri icon app-icon.png                       # all platforms
+npx tauri icon app-icon-mac.png -o /tmp/mac-icons # macOS only
+cp /tmp/mac-icons/icon.icns src-tauri/icons/icon.icns
+cp src-tauri/icons/128x128.png src/logo.png
+rm -rf src-tauri/icons/{android,ios,Square*Logo.png,StoreLogo.png,64x64.png}
+```
+
 ## License and legal
 
 - ffmpeg is licensed under the GPL; it is downloaded at runtime, not bundled.
