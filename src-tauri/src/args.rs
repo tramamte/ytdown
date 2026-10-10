@@ -8,6 +8,8 @@ pub enum Kind { Video, Audio }
 
 pub fn build(kind: Kind, url: &str, playlist: bool, s: &Settings, ffmpeg: &Path, deno: &Path, tmp: &Path) -> Vec<String> {
     let mut a: Vec<String> = vec![
+        // user/system yt-dlp config files must not change the app's output, formats or error handling
+        "--ignore-config".into(),
         "--newline".into(), "--no-colors".into(),
         // pipes otherwise use the locale code page on Windows (garbles non-ASCII titles)
         "--encoding".into(), "utf-8".into(),
@@ -104,6 +106,8 @@ mod tests {
         assert!(a.windows(2).any(|w| w == ["-f", "bv*+ba/b"]));
         assert!(a.windows(2).any(|w| w == ["--merge-output-format", "mp4"]));
         assert!(a.contains(&"--no-playlist".to_string()));
+        // a user's yt-dlp config (-o, -f, --abort-on-error …) must never change the app's behaviour
+        assert_eq!(a[0], "--ignore-config");
         assert!(a.contains(&"--progress".to_string()));
         assert!(has_pair(&a, ["--js-runtimes", "deno:/deno"]));
         assert!(has_pair(&a, ["-o", "%(title)s.%(ext)s"]));

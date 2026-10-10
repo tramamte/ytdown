@@ -401,9 +401,12 @@ async fn kill_tree(child: &mut tokio::process::Child) {
     let _ = child.wait().await;
 }
 
-/// Sum of file sizes; missing/unreadable paths count as 0.
+/// Sum of file sizes, each final file once; missing/unreadable paths count as 0.
 fn total_size(paths: &[String]) -> u64 {
-    paths.iter().filter_map(|p| std::fs::metadata(p).ok()).map(|m| m.len()).sum()
+    let mut seen = std::collections::HashSet::new();
+    // two playlist items can land on one file (case-insensitive file systems on macOS/Windows)
+    paths.iter().filter(|p| seen.insert(if cfg!(target_os = "linux") { p.to_string() } else { p.to_lowercase() }))
+        .filter_map(|p| std::fs::metadata(p).ok()).map(|m| m.len()).sum()
 }
 
 fn decode(line: &[u8]) -> String {
@@ -482,7 +485,9 @@ mod tests {
         let (a, b) = (d.join("a"), d.join("b"));
         std::fs::write(&a, [0u8; 10]).unwrap();
         std::fs::write(&b, [0u8; 5]).unwrap();
-        let paths = vec![a.display().to_string(), b.display().to_string(), d.join("missing").display().to_string()];
+        let paths = vec![a.display().to_string(), b.display().to_string(), d.join("missing").display().to_string(),
+                         // one final file reported twice (two playlist items; names differing only in case on macOS/Windows)
+                         a.display().to_string(), d.join("A").display().to_string()];
         assert_eq!(total_size(&paths), 15);
         let _ = std::fs::remove_dir_all(&d);
     }
