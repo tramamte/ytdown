@@ -10,6 +10,7 @@
 | ffmpeg 배포처 | macOS는 osxexperts.net(URL·해시 고정), Windows/Ubuntu는 BtbN GPL 정적 빌드 |
 | 기본 포맷 | 영상 컨테이너·음성 포맷 기본값 "원본"(재인코딩 없음). 기존 settings.json 값은 유지 |
 | MP4 호환성 | 최고 화질 유지(AV1/Opus 가능). 호환이 필요하면 영상 코덱 H.264, 영상 음성 코덱 AAC 선택 |
+| 소스 관리·CI 분리 | 기본 소스 관리는 GitLab(`origin`), CI·릴리스 빌드만 GitHub(`github`). 릴리스 산출물은 macOS Apple Silicon dmg, Ubuntu x86_64 deb, Windows NSIS setup 3개로 제한(`.github/workflows/release.yml`의 `--bundles`). CI에 반영하려면 `github`에도 push해야 함 |
 | 업데이트 | 시작 시 확인은 입력을 막지 않고 다음 실행 시 적용. 누락된 의존성은 즉시 설치. 설정의 Update 버튼은 즉시 적용(입력 잠김 허용) |
 | yt-dlp 빌드 | onedir 빌드(zip을 `bin/yt-dlp/`에 풀어 폴더째 교체; 기존 onefile 설치는 첫 실행 시 자동 전환). 실측(macOS arm64): `--version` onefile 매번 6.0~6.6초 → onedir 설치 후 첫 실행 6.1~6.4초, 이후 0.18초. 다운로드 시작→첫 진행률 7.5초 → 2.6초. 시작 시 존재만 확인, 동작 여부는 다운로드 시점에 판단 |
 | 화면 | URL 입력창 하나 + Audio only 스위치, 420×420 고정 창(PO 조정), 진행 중 스트림 단계 표시, 완료 시 막대 숨김·제목 흐리게·용량 표시 |
