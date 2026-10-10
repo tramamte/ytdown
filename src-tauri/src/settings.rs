@@ -6,8 +6,8 @@ use tauri::{AppHandle, Manager};
 pub struct Settings {
     pub download_dir: PathBuf,
     pub quality: Option<u32>, // None = best
-    pub container: String,    // mp4 | mkv | webm
-    pub audio_format: String, // mp3 | m4a | opus | ...
+    pub container: String,    // mp4 | mkv | webm | original
+    pub audio_format: String, // mp3 | m4a | opus | ... | original
     pub shortcut: String,
     #[serde(default = "default_codec")]
     pub video_codec: String,  // auto | h264 | vp9 | av1
@@ -20,8 +20,8 @@ fn default_audio_quality() -> String { "best".into() }
 
 impl Settings {
     pub fn new(download_dir: PathBuf) -> Self {
-        Self { download_dir, quality: None, container: "mp4".into(),
-               audio_format: "mp3".into(), shortcut: "CommandOrControl+Shift+Y".into(),
+        Self { download_dir, quality: None, container: "original".into(),
+               audio_format: "original".into(), shortcut: "CommandOrControl+Shift+Y".into(),
                video_codec: default_codec(), audio_quality: default_audio_quality() }
     }
 }
@@ -43,10 +43,10 @@ pub fn save(app: &AppHandle, s: &Settings) -> Result<(), String> {
 }
 
 pub fn validate(s: &Settings) -> Result<(), String> {
-    if !["mp4", "mkv", "webm"].contains(&s.container.as_str()) {
+    if !["mp4", "mkv", "webm", "original"].contains(&s.container.as_str()) {
         return Err(format!("container: unsupported value {:?}", s.container));
     }
-    if !["mp3", "m4a", "opus", "flac", "wav"].contains(&s.audio_format.as_str()) {
+    if !["mp3", "m4a", "opus", "flac", "wav", "original"].contains(&s.audio_format.as_str()) {
         return Err(format!("audio_format: unsupported value {:?}", s.audio_format));
     }
     if !["auto", "h264", "vp9", "av1"].contains(&s.video_codec.as_str()) {
@@ -107,5 +107,13 @@ mod tests {
     #[test]
     fn valid_quality() {
         assert!(validate(&Settings { quality: Some(1080), ..ok() }).is_ok());
+    }
+
+    #[test]
+    fn original_defaults_and_valid() {
+        let d = ok();
+        assert_eq!((d.container.as_str(), d.audio_format.as_str()), ("original", "original"));
+        assert!(validate(&Settings { container: "original".into(), ..ok() }).is_ok());
+        assert!(validate(&Settings { audio_format: "original".into(), ..ok() }).is_ok());
     }
 }

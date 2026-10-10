@@ -91,6 +91,8 @@ document.querySelectorAll(".url").forEach((i) =>
 
 // ---- settings ----
 let current;
+const syncAq = () => { $("#s-aq").disabled = ["original", "flac", "wav"].includes($("#s-audio").value); };
+$("#s-audio").addEventListener("change", syncAq);
 const fill = (s) => {
   current = s;
   $("#s-dir").value = s.download_dir;
@@ -99,6 +101,7 @@ const fill = (s) => {
   $("#s-audio").value = s.audio_format;
   $("#s-codec").value = s.video_codec;
   $("#s-aq").value = s.audio_quality;
+  syncAq();
   $("#s-shortcut").value = s.shortcut;
 };
 $("#mac-note").hidden = !navigator.userAgent.includes("Mac");
