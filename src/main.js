@@ -109,7 +109,7 @@ const fill = (s) => {
 $("#mac-note").hidden = !navigator.userAgent.includes("Mac");
 $("#open-settings").onclick = () => { showErr($("#s-err"), ""); fill(current); $("#settings-dialog").showModal(); };
 $("#s-cancel").onclick = () => $("#settings-dialog").close();
-$("#s-deps").onclick = () => invoke("ensure_deps").catch(() => {});
+$("#s-deps").onclick = () => invoke("update_deps").catch(() => {});
 $("#s-choose").onclick = async () => {
   const dir = await dialogApi.open({ directory: true });
   if (dir) $("#s-dir").value = dir;

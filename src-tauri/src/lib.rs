@@ -59,6 +59,7 @@ pub fn run() {
     .manage(download::Manager::new())
     .invoke_handler(tauri::generate_handler![
       deps::ensure_deps,
+      deps::update_deps,
       download::classify_url,
       download::start_download,
       download::cancel_download,

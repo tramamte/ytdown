@@ -268,19 +268,24 @@ fn apply_pending(bin: &Path) {
     }
 }
 
-/// Stages a newer yt-dlp in `pending/`. Returns the staged version, or None if up to date.
-async fn stage_update(app: &AppHandle) -> Result<Option<String>, String> {
+/// Moves a staged update over `bin` now. On failure (e.g. Windows exe locked) it stays staged.
+fn promote_pending(bin: &Path) -> std::io::Result<()> {
+    std::fs::rename(pending_path(bin), bin)
+}
+
+/// Stages a newer yt-dlp in `pending/`. Returns (latest version, whether it was staged).
+async fn stage_update(app: &AppHandle) -> Result<(String, bool), String> {
     let ytdlp = ytdlp_path(app);
     let latest = parse_tag(&fetch_text(YTDLP_API).await?).ok_or("No tag_name in yt-dlp release info")?;
     let installed = version(&ytdlp).await.ok_or("yt-dlp does not run")?;
-    if !is_newer(&installed, &latest) { return Ok(None); }
+    if !is_newer(&installed, &latest) { return Ok((latest, false)); }
     let pending = pending_path(&ytdlp);
     if version(&pending).await.as_deref() != Some(latest.as_str()) {
         std::fs::create_dir_all(pending.parent().expect("pending dir")).map_err(|e| e.to_string())?;
         let base = format!("https://github.com/yt-dlp/yt-dlp/releases/download/{latest}/");
         install("yt-dlp", ytdlp_source(&base)?, &pending).await?;
     }
-    Ok(Some(latest))
+    Ok((latest, true))
 }
 
 static CHECKING: AtomicBool = AtomicBool::new(false);
@@ -291,9 +296,9 @@ fn spawn_update_check(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         match stage_update(&app).await {
-            Ok(Some(v)) => emit(&app, "update",
+            Ok((v, true)) => emit(&app, "update",
                 &format!("yt-dlp {v} downloaded; it will be applied the next time you start ytdown.")),
-            Ok(None) => {}
+            Ok((_, false)) => {}
             Err(e) => {
                 log::warn!("yt-dlp update check failed: {e}");
                 emit(&app, "ready", "Could not check for yt-dlp updates; using installed version.");
@@ -322,6 +327,48 @@ pub async fn ensure_deps(app: AppHandle) -> Result<(), String> {
         Ok(()) => { emit(&app, "ready", ""); spawn_update_check(&app); Ok(()) }
         Err(e) => { emit(&app, "error", &e); Err(e) }
     }
+}
+
+/// Settings "Update" button: installs missing binaries, then applies a newer yt-dlp now.
+#[tauri::command]
+pub async fn update_deps(app: AppHandle) -> Result<(), String> {
+    let _guard = RUNNING.lock().await;
+    // Hold the background-check guard too, so a check can't stage concurrently; wait out a running one.
+    while CHECKING.swap(true, Ordering::SeqCst) {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    let result = update(&app).await;
+    CHECKING.store(false, Ordering::SeqCst);
+    result
+}
+
+async fn update(app: &AppHandle) -> Result<(), String> {
+    emit(app, "working", "Checking for updates…");
+    if let Err(e) = ensure(app).await {
+        emit(app, "error", &e);
+        return Err(e);
+    }
+    let ytdlp = ytdlp_path(app);
+    // stage_update reuses an already-staged latest build instead of re-downloading.
+    match stage_update(app).await {
+        Ok((v, true)) => match promote_pending(&ytdlp) {
+            Ok(()) => emit(app, "update", &format!("yt-dlp updated to {v}.")),
+            Err(e) => {
+                log::warn!("Could not replace yt-dlp now: {e}");
+                emit(app, "update", &format!("yt-dlp {v} downloaded; it will be applied the next time you start ytdown."));
+            }
+        },
+        Ok((v, false)) => {
+            // A leftover staged build is not newer; drop it so next launch can't downgrade.
+            let _ = std::fs::remove_file(pending_path(&ytdlp));
+            emit(app, "update", &format!("yt-dlp is up to date ({v})."));
+        }
+        Err(e) => {
+            log::warn!("yt-dlp update check failed: {e}");
+            emit(app, "ready", "Could not check for yt-dlp updates; using installed version.");
+        }
+    }
+    Ok(())
 }
 
 static APPLIED: AtomicBool = AtomicBool::new(false);
@@ -413,6 +460,24 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&bin).unwrap(), "old");
         std::fs::write(pending_path(&bin), "new").unwrap();
         apply_pending(&bin);
+        assert_eq!(std::fs::read_to_string(&bin).unwrap(), "new");
+        assert!(!pending_path(&bin).exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn promote_keeps_pending_on_failure() {
+        let dir = std::env::temp_dir().join(format!("ytdown-promote-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("pending")).unwrap();
+        let bin = dir.join("yt-dlp");
+        std::fs::write(pending_path(&bin), "new").unwrap();
+        // A non-empty directory at `bin` makes the rename fail (stands in for a locked exe).
+        std::fs::create_dir_all(bin.join("x")).unwrap();
+        assert!(promote_pending(&bin).is_err());
+        assert_eq!(std::fs::read_to_string(pending_path(&bin)).unwrap(), "new");
+        std::fs::remove_dir_all(&bin).unwrap();
+        std::fs::write(&bin, "old").unwrap();
+        promote_pending(&bin).unwrap();
         assert_eq!(std::fs::read_to_string(&bin).unwrap(), "new");
         assert!(!pending_path(&bin).exists());
         std::fs::remove_dir_all(&dir).unwrap();
