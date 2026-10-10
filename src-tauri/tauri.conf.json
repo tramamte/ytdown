@@ -11,11 +11,9 @@
     "windows": [
       {
         "title": "ytdown by Patrick Yu",
-        "width": 560,
-        "height": 640,
-        "minWidth": 420,
-        "minHeight": 480,
-        "resizable": true,
+        "width": 420,
+        "height": 480,
+        "resizable": false,
         "fullscreen": false
       }
     ],
