@@ -221,7 +221,7 @@ document.addEventListener("keydown", (e) => {
     $("#audio-only").checked = !$("#audio-only").checked;
   }
 });
-$("#audio-hint").textContent = MAC ? "⌘⇧A toggle · ⇧↩ audio once" : "Ctrl+Shift+A toggle · Shift+Enter audio once";
+$("#audio-hint").textContent = MAC ? "⌘⇧A toggle · ⇧↩ audio once" : "Ctrl+⇧A toggle · ⇧Enter once";
 
 // ---- startup (listeners first, then settings, shortcut, deps) ----
 (async () => {
