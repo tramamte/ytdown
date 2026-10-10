@@ -58,7 +58,7 @@ Tauri v2를 사용한다. 공식 번들러와 CI 액션으로 3개 OS 설치 파
 
 ### 외부 의존성 관리
 
-- 대상: yt-dlp(onefile 빌드), ffmpeg, Deno(yt-dlp의 YouTube 추출에 필요한 JS 런타임)
+- 대상: yt-dlp(onedir 빌드, `bin/yt-dlp/` 폴더), ffmpeg, Deno(yt-dlp의 YouTube 추출에 필요한 JS 런타임)
 - 저장 위치: 앱 데이터 폴더의 `bin/` (설치 파일에 동봉하지 않음)
 - 설치: 다운로드, sha256 검증, 실행 권한 부여(macOS/Linux), macOS는 격리 속성 제거, 원자적 교체
 - 앱 시작: 파일 존재 여부만 확인 → 누락 시 즉시 설치(그동안만 입력 비활성화), 그 외에는 바로 입력 가능

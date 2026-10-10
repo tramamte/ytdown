@@ -11,7 +11,7 @@
 | 기본 포맷 | 영상 컨테이너·음성 포맷 기본값 "원본"(재인코딩 없음). 기존 settings.json 값은 유지 |
 | MP4 호환성 | 최고 화질 유지(AV1/Opus 가능). 호환이 필요하면 영상 코덱 H.264, 영상 음성 코덱 AAC 선택 |
 | 업데이트 | 시작 시 확인은 입력을 막지 않고 다음 실행 시 적용. 누락된 의존성은 즉시 설치. 설정의 Update 버튼은 즉시 적용(입력 잠김 허용) |
-| yt-dlp 빌드 | 당분간 onefile 유지. 시작 시 존재만 확인, 동작 여부는 다운로드 시점에 판단 |
+| yt-dlp 빌드 | onedir 빌드(zip을 `bin/yt-dlp/`에 풀어 폴더째 교체; 기존 onefile 설치는 첫 실행 시 자동 전환). 실측(macOS arm64): `--version` onefile 매번 6.0~6.6초 → onedir 설치 후 첫 실행 6.1~6.4초, 이후 0.18초. 다운로드 시작→첫 진행률 7.5초 → 2.6초. 시작 시 존재만 확인, 동작 여부는 다운로드 시점에 판단 |
 | 화면 | URL 입력창 하나 + Audio only 스위치, 420×420 고정 창(PO 조정), 진행 중 스트림 단계 표시, 완료 시 막대 숨김·제목 흐리게·용량 표시 |
 | 단축키 | 전역 기본 Ctrl+Option+Y / Ctrl+Alt+Y(키 녹화로 변경), 설정 열기 Ctrl+,(macOS ⌘,), 저장 ⌘S/Ctrl+S, 닫기 Esc(⌘W는 메뉴 수정이 필요해 제외), Audio only 토글 ⌘⇧A/Ctrl+Shift+A, Shift+Enter는 1회 음성 |
 | 아이콘·색 | 앱 아이콘(남색·주황)을 헤더 로고로 사용. 포커스 링·스위치 등 강조색은 YouTube에 맞춰 빨간색 유지. 아이콘 원본 2종: `app-icon.png`(투명 테두리, Windows·Ubuntu·앱 내 로고), `app-icon-mac.png`(꽉 찬 정사각형, macOS가 모양을 씌움) |
@@ -47,6 +47,5 @@
 - 순수 재생목록 URL(`/playlist?list=`)에서 "This video only"를 골라도 전체가 받아짐
 - 재생목록 다음 항목으로 넘어갈 때 단계·퍼센트 표시가 잠깐 이전 값으로 남음
 - 999,950~999,999 B는 "1000.0 KB"로 표시
-- yt-dlp onefile 빌드는 실행마다 약 6초의 시작 지연(onedir 전환으로 해소 가능, 미착수)
 - 단축키 녹화 시 global-hotkey가 모르는 키(IntlBackslash 등)는 저장할 때 오류로 안내
 - 완료 제목 색(`--faint`)은 WCAG AA 대비 미만(PO 선택)
