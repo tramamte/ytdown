@@ -12,7 +12,7 @@ pub fn classify(input: &str) -> UrlKind {
     }
     if !u.query_pairs().any(|(k, _)| k == "list") { return UrlKind::Video }
     let mut seg = u.path_segments().into_iter().flatten();
-    let has_video = u.query_pairs().any(|(k, _)| k == "v")
+    let has_video = u.query_pairs().any(|(k, v)| k == "v" && !v.is_empty())
         || host == "youtu.be" && seg.clone().next().is_some_and(|s| !s.is_empty())
         || matches!(seg.next(), Some("shorts" | "live" | "embed"))
             && seg.next().is_some_and(|s| !s.is_empty() && s != "videoseries");
@@ -28,6 +28,8 @@ mod tests {
         assert_eq!(classify("https://youtu.be/abc"), UrlKind::Video);
         assert_eq!(classify("https://www.youtube.com/watch?v=abc&list=PL1"), UrlKind::Playlist);
         assert_eq!(classify("https://www.youtube.com/playlist?list=PL1"), UrlKind::PlaylistOnly);
+        assert_eq!(classify("https://www.youtube.com/watch?list=PL1"), UrlKind::PlaylistOnly);
+        assert_eq!(classify("https://www.youtube.com/watch?v=&list=PL1"), UrlKind::PlaylistOnly);
         assert_eq!(classify("https://music.youtube.com/playlist?list=PL1"), UrlKind::PlaylistOnly);
         assert_eq!(classify("https://youtu.be/abc?list=PL1"), UrlKind::Playlist);
         assert_eq!(classify("https://www.youtube.com/shorts/abc?list=PL1"), UrlKind::Playlist);
