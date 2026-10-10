@@ -155,10 +155,12 @@ sc.addEventListener("keydown", (e) => {
   if (e.key === "Escape") { sc.blur(); return; }     // cancel recording, keep previous
   if (["Shift", "Control", "Alt", "Meta"].includes(e.key)) return;  // wait for the main key
   const mods = [];
-  if (MAC ? e.metaKey : e.ctrlKey) mods.push("CommandOrControl");
+  // platform order: macOS ⌃⌥⇧⌘, others Ctrl+Alt+Shift
+  if (!MAC && e.ctrlKey) mods.push("CommandOrControl");
   if (MAC && e.ctrlKey) mods.push("Control");
   if (e.altKey) mods.push("Alt");
   if (e.shiftKey) mods.push("Shift");
+  if (MAC && e.metaKey) mods.push("CommandOrControl");
   if (!mods.some((m) => m !== "Shift")) { sc.value = MAC ? "Include ⌘, ⌃ or ⌥" : "Include Ctrl or Alt"; return; }
   setShortcutField([...mods, keyName(e.code)].join("+"));
   sc.blur();
@@ -193,7 +195,8 @@ $("#settings-form").addEventListener("submit", async (e) => {
 // e.code so non-Latin input sources (e.g. Korean) still match. Returns "open" | "save" | null.
 const settingsKey = (e, mac, openId) => {
   const mod = mac ? e.metaKey : e.ctrlKey;
-  if (e.code === "Comma") return (e.ctrlKey || mod) && !openId ? "open" : null;
+  if (e.code === "Comma" || e.key === ",")  // key position, or the "," character on other layouts
+    return (e.ctrlKey || mod) && !e.altKey && !e.shiftKey && !openId ? "open" : null;
   return mod && e.code === "KeyS" && openId === "settings-dialog" ? "save" : null;
 };
 document.addEventListener("keydown", (e) => {
