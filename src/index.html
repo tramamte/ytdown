@@ -56,44 +56,54 @@
     <form id="settings-form" method="dialog">
       <h2>Settings</h2>
       <p id="shortcut-note" class="err" hidden></p>
-      <label for="s-dir">Download folder</label>
-      <div class="row">
-        <input id="s-dir" readonly>
-        <button type="button" id="s-choose">Choose…</button>
-      </div>
-      <label for="s-quality">Quality</label>
-      <select id="s-quality">
-        <option value="">Best</option>
-        <option>2160</option><option>1440</option><option>1080</option>
-        <option>720</option><option>480</option><option>360</option>
-      </select>
-      <label for="s-container">Video container</label>
-      <select id="s-container">
-        <option value="mp4">MP4</option><option value="mkv">MKV</option><option value="webm">WebM</option>
-        <option value="original">Original (no remux)</option>
-      </select>
-      <label for="s-codec">Video codec</label>
-      <select id="s-codec">
-        <option value="auto">Auto (best available)</option><option value="h264">H.264 (most compatible)</option>
-        <option value="vp9">VP9</option><option value="av1">AV1</option>
-      </select>
-      <label for="s-audio">Audio format</label>
-      <select id="s-audio">
-        <option value="mp3">MP3</option><option value="m4a">M4A</option>
-        <option value="opus">Opus</option><option value="flac">FLAC</option><option value="wav">WAV</option>
-        <option value="original">Original (no conversion)</option>
-      </select>
-      <label for="s-aq">Audio quality</label>
-      <select id="s-aq">
-        <option value="best">Best</option><option value="320k">320 kbps</option>
-        <option value="192k">192 kbps</option><option value="128k">128 kbps</option>
-      </select>
-      <p class="about">Applies to MP3, M4A and Opus</p>
-      <label for="s-shortcut">Global shortcut</label>
-      <input id="s-shortcut" placeholder="CommandOrControl+Shift+Y">
-      <div class="row">
-        <button type="button" id="s-deps">Update dependencies</button>
-      </div>
+      <fieldset>
+        <legend>General</legend>
+        <label for="s-dir">Download folder</label>
+        <div class="row">
+          <input id="s-dir" readonly>
+          <button type="button" id="s-choose">Choose…</button>
+        </div>
+        <label for="s-shortcut">Global shortcut</label>
+        <input id="s-shortcut" placeholder="CommandOrControl+Shift+Y">
+      </fieldset>
+      <fieldset>
+        <legend>Video</legend>
+        <label for="s-container">Format</label>
+        <select id="s-container">
+          <option value="original">Original (no remux)</option>
+          <option value="mp4">MP4</option><option value="mkv">MKV</option><option value="webm">WebM</option>
+        </select>
+        <label for="s-codec">Codec</label>
+        <select id="s-codec">
+          <option value="auto">Auto (best available)</option><option value="h264">H.264 (most compatible)</option>
+          <option value="vp9">VP9</option><option value="av1">AV1</option>
+        </select>
+        <label for="s-quality">Max resolution</label>
+        <select id="s-quality">
+          <option value="">Best</option>
+          <option>2160</option><option>1440</option><option>1080</option>
+          <option>720</option><option>480</option><option>360</option>
+        </select>
+      </fieldset>
+      <fieldset>
+        <legend>Audio</legend>
+        <label for="s-audio">Format</label>
+        <select id="s-audio">
+          <option value="original">Original (no conversion)</option>
+          <option value="mp3">MP3</option><option value="m4a">M4A</option>
+          <option value="opus">Opus</option><option value="flac">FLAC</option><option value="wav">WAV</option>
+        </select>
+        <label for="s-aq">Quality</label>
+        <select id="s-aq">
+          <option value="best">Best</option><option value="320k">320 kbps</option>
+          <option value="192k">192 kbps</option><option value="128k">128 kbps</option>
+        </select>
+        <p class="about">Not used for Original, FLAC and WAV</p>
+      </fieldset>
+      <fieldset>
+        <legend>Dependencies</legend>
+        <button type="button" id="s-deps">Update yt-dlp / ffmpeg / Deno</button>
+      </fieldset>
       <p id="s-err" class="err" hidden></p>
       <p class="about">ffmpeg is licensed under GPL. Downloading YouTube content may violate YouTube's Terms of Service; you are responsible for how you use this app.</p>
       <p class="about" id="mac-note" hidden>The global shortcut may require Accessibility permission (System Settings → Privacy &amp; Security → Accessibility).</p>
