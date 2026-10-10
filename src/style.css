@@ -1,12 +1,12 @@
 :root {
   --bg: #fff; --fg: #1c1c1e; --muted: #6b6b70; --line: #d6d6db; --card: #f4f4f6;
   --accent: #2563eb; --err: #c62828; --warn: #8a5a00;
-  --info-bg: #e8f0fe; --err-bg: #fdecea; --warn-bg: #fff4e0; --ok: #2e7d32; --brand: #e62117; --faint: #a1a1a6;
+  --info-bg: #e8f0fe; --err-bg: #fdecea; --warn-bg: #fff4e0; --ok: #2e7d32; --brand: #e62117; --faint: #6c6c71;
 }
 @media (prefers-color-scheme: dark) {
   :root { --bg: #1c1c1e; --fg: #f2f2f4; --muted: #9a9aa0; --line: #3a3a3f; --card: #2a2a2d;
     --accent: #6ea0ff; --err: #ff8a80; --warn: #ffcc66;
-    --info-bg: #1e2a40; --err-bg: #3a2222; --warn-bg: #3a3020; --ok: #81c784; --brand: #ff4e45; --faint: #7a7a80; }
+    --info-bg: #1e2a40; --err-bg: #3a2222; --warn-bg: #3a3020; --ok: #81c784; --brand: #ff4e45; --faint: #909096; }
 }
 /* bundled UI font (Inter 4.1, SIL OFL — fonts/Inter-LICENSE.txt) so text looks the same on every OS;
    glyphs Inter lacks (Korean/CJK titles, some symbols) fall back to the system font */
