@@ -24,8 +24,6 @@ header { padding-bottom: 10px; border-bottom: 1px solid var(--line); }
 h1 { display: flex; align-items: center; gap: 6px; font-size: 20px; line-height: 1; font-weight: 800; letter-spacing: -.02em; }
 /* the icon PNG has ~10% transparent padding; 30px shows a ~24px tile */
 h1 .logo { width: 30px; height: 30px; }
-/* lowercase + descender put the word's visual centre ~2px low; lift it to the logo's centre */
-h1 span { transform: translateY(-2px); }
 /* section eyebrows: URL label and Downloads heading */
 main .field > label:first-child, .list-head h2 { margin: 14px 0 6px; font-size: 11px; font-weight: 700;
   letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
