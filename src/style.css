@@ -1,12 +1,12 @@
 :root {
   --bg: #fff; --fg: #1c1c1e; --muted: #6b6b70; --line: #d6d6db; --card: #f4f4f6;
   --accent: #2563eb; --err: #c62828; --warn: #8a5a00;
-  --info-bg: #e8f0fe; --err-bg: #fdecea; --warn-bg: #fff4e0; --ok: #2e7d32; --brand: #e62117;
+  --info-bg: #e8f0fe; --err-bg: #fdecea; --warn-bg: #fff4e0; --ok: #2e7d32; --brand: #e62117; --faint: #a1a1a6;
 }
 @media (prefers-color-scheme: dark) {
   :root { --bg: #1c1c1e; --fg: #f2f2f4; --muted: #9a9aa0; --line: #3a3a3f; --card: #2a2a2d;
     --accent: #6ea0ff; --err: #ff8a80; --warn: #ffcc66;
-    --info-bg: #1e2a40; --err-bg: #3a2222; --warn-bg: #3a3020; --ok: #81c784; --brand: #ff4e45; }
+    --info-bg: #1e2a40; --err-bg: #3a2222; --warn-bg: #3a3020; --ok: #81c784; --brand: #ff4e45; --faint: #7a7a80; }
 }
 * { box-sizing: border-box; }
 body { margin: 0; padding: 12px 16px; background: var(--bg); color: var(--fg);
@@ -75,7 +75,7 @@ button { cursor: pointer; white-space: nowrap; }
 [hidden] { display: none !important; }
 .list-head { margin-top: 18px; }
 #list { list-style: none; margin: 8px 0 0; padding: 0; flex: 1; min-height: 0; overflow-y: auto; }
-#list li { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; padding: 8px 10px;
+#list li { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 2px 8px; padding: 8px 10px;
   margin-bottom: 6px; background: var(--card); border: 1px solid var(--line); border-radius: 6px; }
 /* per-state colors: active = blue tint, done = green, failed = red, canceled = faded */
 #list li { border-left: 3px solid var(--line); }
@@ -84,7 +84,7 @@ button { cursor: pointer; white-space: nowrap; }
 #list li[data-state="done"] .meta { color: var(--ok); }
 /* finished: no bar, muted title */
 #list li[data-state="done"] progress { display: none; }
-#list li[data-state="done"] .title { color: var(--muted); }
+#list li[data-state="done"] .title { color: var(--faint); }
 #list li[data-state="error"] { background: var(--err-bg); border-left-color: var(--err); }
 #list li[data-state="canceled"] { opacity: .6; }
 #list .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
