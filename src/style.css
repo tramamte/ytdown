@@ -63,7 +63,8 @@ input, select { width: 100%; }
 input:disabled { opacity: .5; }
 .check { display: flex; align-items: center; gap: 6px; font-weight: 400; }
 .check input { width: auto; margin: 0; }
-.check .hint { margin-left: 4px; color: var(--muted); font-size: 12px; }
+/* hint sits inline with the label text: shared baseline, independent of per-OS font metrics */
+.check .hint { margin-left: 6px; color: var(--muted); font-size: 12px; }
 button { cursor: pointer; white-space: nowrap; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .err { color: var(--err); margin: 4px 0 0; }

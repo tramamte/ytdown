@@ -35,13 +35,16 @@ npx tauri build
 
 ## Icons
 
-Two sources: `app-icon.png` (rounded, transparent margin — Windows/Linux and the in-app logo)
-and `app-icon-mac.png` (full-bleed square; macOS applies its own mask). To regenerate:
+Three sources: `app-icon.png` (rounded, transparent margin — Linux and the in-app logo),
+`app-icon-mac.png` (full-bleed square; macOS applies its own mask) and `app-icon-win.png`
+(`app-icon-mac.png` with 22.5% rounded corners, no margin — matches other Windows taskbar icons). To regenerate:
 
 ```
 npx tauri icon app-icon.png                       # all platforms
 npx tauri icon app-icon-mac.png -o /tmp/mac-icons # macOS only
 cp /tmp/mac-icons/icon.icns src-tauri/icons/icon.icns
+npx tauri icon app-icon-win.png -o /tmp/win-icons # Windows only
+cp /tmp/win-icons/icon.ico src-tauri/icons/icon.ico
 cp src-tauri/icons/128x128.png src/logo.png
 rm -rf src-tauri/icons/{android,ios,Square*Logo.png,StoreLogo.png,64x64.png}
 ```
