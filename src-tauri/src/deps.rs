@@ -45,8 +45,11 @@ fn find_hash(body: &str, asset: &str) -> Option<String> {
     })
 }
 
+/// First 64-hex token: covers bare `<hash>`, `<hash>  <name>` and PowerShell `Hash : <HASH>`.
 fn first_token(body: &str) -> Option<String> {
-    body.split_whitespace().next().map(str::to_string)
+    body.split_whitespace()
+        .find(|t| t.len() == 64 && t.bytes().all(|b| b.is_ascii_hexdigit()))
+        .map(str::to_string)
 }
 
 /// How to verify a download.
@@ -297,9 +300,17 @@ mod tests {
 
     #[test]
     fn first_token_of_sumfile() {
-        assert_eq!(first_token("5cd46d  deno.zip\n").as_deref(), Some("5cd46d"));
-        assert_eq!(first_token("5cd46d\n").as_deref(), Some("5cd46d"));
+        let h = "5cd46d6268f6f78f5d88bdc7159d20bd44cdaa4b3303474839f87ec6fe7ae25c";
+        assert_eq!(first_token(&format!("{h}  deno.zip\n")).as_deref(), Some(h));
+        assert_eq!(first_token(&format!("{h}\n")).as_deref(), Some(h));
         assert_eq!(first_token("  \n"), None);
+    }
+
+    #[test]
+    fn hash_token_of_powershell_sumfile() {
+        let h = "5CD46D6268F6F78F5D88BDC7159D20BD44CDAA4B3303474839F87EC6FE7AE25C";
+        let body = format!("\r\nAlgorithm : SHA256\r\nHash      : {h}\r\nPath      : C:\\a\\deno\\deno-x86_64-pc-windows-msvc.zip\r\n");
+        assert_eq!(first_token(&body).as_deref(), Some(h));
     }
 
     #[test]
