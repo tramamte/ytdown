@@ -236,11 +236,23 @@ async fn runs_ok(path: &Path, arg: &str) -> bool {
     path.exists() && command(path).arg(arg).output().await.is_ok_and(|o| o.status.success())
 }
 
-/// Trimmed `--version` stdout, if the binary runs.
+/// Non-empty (unix: executable) regular file. For yt-dlp at launch: running it takes seconds
+/// (the one-file build unpacks itself), so the real health probe is the background check.
+fn looks_installed(path: &Path) -> bool {
+    let Ok(m) = std::fs::metadata(path) else { return false };
+    #[cfg(unix)]
+    let exec = std::os::unix::fs::PermissionsExt::mode(&m.permissions()) & 0o111 != 0;
+    #[cfg(not(unix))]
+    let exec = true;
+    m.is_file() && m.len() > 0 && exec
+}
+
+/// Trimmed non-empty `--version` stdout, if the binary runs.
 async fn version(path: &Path) -> Option<String> {
     if !path.exists() { return None; }
     let o = command(path).arg("--version").output().await.ok()?;
-    o.status.success().then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    let v = String::from_utf8_lossy(&o.stdout).trim().to_string();
+    (o.status.success() && !v.is_empty()).then_some(v)
 }
 
 /// Dotted numeric versions (yt-dlp `2026.08.19`, hotfix `2022.06.22.1`); unparseable = not newer.
@@ -274,11 +286,10 @@ fn promote_pending(bin: &Path) -> std::io::Result<()> {
 }
 
 /// Stages a newer yt-dlp in `pending/`. Returns (latest version, whether it was staged).
-async fn stage_update(app: &AppHandle) -> Result<(String, bool), String> {
+async fn stage_update(app: &AppHandle, installed: &str) -> Result<(String, bool), String> {
     let ytdlp = ytdlp_path(app);
     let latest = parse_tag(&fetch_text(YTDLP_API).await?).ok_or("No tag_name in yt-dlp release info")?;
-    let installed = version(&ytdlp).await.ok_or("yt-dlp does not run")?;
-    if !is_newer(&installed, &latest) { return Ok((latest, false)); }
+    if !is_newer(installed, &latest) { return Ok((latest, false)); }
     let pending = pending_path(&ytdlp);
     if version(&pending).await.as_deref() != Some(latest.as_str()) {
         std::fs::create_dir_all(pending.parent().expect("pending dir")).map_err(|e| e.to_string())?;
@@ -290,22 +301,37 @@ async fn stage_update(app: &AppHandle) -> Result<(String, bool), String> {
 
 static CHECKING: AtomicBool = AtomicBool::new(false);
 
-/// Background update check; a request while one runs is a no-op. Never blocks input.
+/// Background update check, which is also the yt-dlp health probe; a request while one runs
+/// is a no-op. Blocks input only to reinstall a yt-dlp that does not run.
 fn spawn_update_check(app: &AppHandle) {
     if CHECKING.swap(true, Ordering::SeqCst) { return; }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        match stage_update(&app).await {
-            Ok((v, true)) => emit(&app, "update",
-                &format!("yt-dlp {v} downloaded; it will be applied the next time you start ytdown.")),
-            Ok((_, false)) => {}
-            Err(e) => {
-                log::warn!("yt-dlp update check failed: {e}");
-                emit(&app, "ready", "Could not check for yt-dlp updates; using installed version.");
-            }
+        match version(&ytdlp_path(&app)).await {
+            Some(installed) => match stage_update(&app, &installed).await {
+                Ok((v, true)) => emit(&app, "update",
+                    &format!("yt-dlp {v} downloaded; it will be applied the next time you start ytdown.")),
+                Ok((_, false)) => {}
+                Err(e) => {
+                    log::warn!("yt-dlp update check failed: {e}");
+                    emit(&app, "ready", "Could not check for yt-dlp updates; using installed version.");
+                }
+            },
+            None => repair_ytdlp(&app).await,
         }
         CHECKING.store(false, Ordering::SeqCst);
     });
+}
+
+/// Reinstalls a yt-dlp that does not run. Skipped if an install/update holds RUNNING.
+async fn repair_ytdlp(app: &AppHandle) {
+    let Ok(_guard) = RUNNING.try_lock() else { return };
+    log::warn!("yt-dlp does not run; reinstalling");
+    emit(app, "working", "Downloading yt-dlp…");
+    match async { install("yt-dlp", ytdlp_source(YTDLP_BASE)?, &ytdlp_path(app)).await }.await {
+        Ok(()) => emit(app, "ready", ""),
+        Err(e) => emit(app, "error", &e),
+    }
 }
 
 #[derive(Serialize, Clone)]
@@ -322,8 +348,9 @@ static RUNNING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[tauri::command]
 pub async fn ensure_deps(app: AppHandle) -> Result<(), String> {
-    let _guard = RUNNING.lock().await; // concurrent callers wait, then re-run
-    match ensure(&app).await {
+    // Concurrent callers wait, then re-run. Released before the check so it can take RUNNING to repair.
+    let result = { let _guard = RUNNING.lock().await; ensure(&app, false).await };
+    match result {
         Ok(()) => { emit(&app, "ready", ""); spawn_update_check(&app); Ok(()) }
         Err(e) => { emit(&app, "error", &e); Err(e) }
     }
@@ -344,13 +371,17 @@ pub async fn update_deps(app: AppHandle) -> Result<(), String> {
 
 async fn update(app: &AppHandle) -> Result<(), String> {
     emit(app, "working", "Checking for updates…");
-    if let Err(e) = ensure(app).await {
+    if let Err(e) = ensure(app, true).await {
         emit(app, "error", &e);
         return Err(e);
     }
     let ytdlp = ytdlp_path(app);
-    // stage_update reuses an already-staged latest build instead of re-downloading.
-    match stage_update(app).await {
+    let staged = match version(&ytdlp).await {
+        // stage_update reuses an already-staged latest build instead of re-downloading.
+        Some(installed) => stage_update(app, &installed).await,
+        None => Err("yt-dlp does not run".into()),
+    };
+    match staged {
         Ok((v, true)) => match promote_pending(&ytdlp) {
             Ok(()) => emit(app, "update", &format!("yt-dlp updated to {v}.")),
             Err(e) => {
@@ -373,7 +404,8 @@ async fn update(app: &AppHandle) -> Result<(), String> {
 
 static APPLIED: AtomicBool = AtomicBool::new(false);
 
-async fn ensure(app: &AppHandle) -> Result<(), String> {
+/// `probe_ytdlp`: run yt-dlp to check it (slow); otherwise only check the file is there.
+async fn ensure(app: &AppHandle, probe_ytdlp: bool) -> Result<(), String> {
     std::fs::create_dir_all(bin_dir(app)).map_err(|e| e.to_string())?;
     // Only on the first call (launch): later calls must not swap a binary that may be running.
     if !APPLIED.swap(true, Ordering::SeqCst) {
@@ -384,7 +416,8 @@ async fn ensure(app: &AppHandle) -> Result<(), String> {
         ("ffmpeg", ffmpeg_path(app), "-version", ffmpeg_source),
         ("deno", deno_path(app), "--version", deno_source),
     ] {
-        if !runs_ok(&path, arg).await {
+        let ok = if name == "yt-dlp" && !probe_ytdlp { looks_installed(&path) } else { runs_ok(&path, arg).await };
+        if !ok {
             emit(app, "working", &format!("Downloading {name}…"));
             install(name, source()?, &path).await?;
         }
@@ -480,6 +513,33 @@ mod tests {
         promote_pending(&bin).unwrap();
         assert_eq!(std::fs::read_to_string(&bin).unwrap(), "new");
         assert!(!pending_path(&bin).exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn present_without_spawning() {
+        let dir = std::env::temp_dir().join(format!("ytdown-present-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("yt-dlp");
+        assert!(!looks_installed(&bin)); // missing
+        std::fs::write(&bin, "").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert!(!looks_installed(&bin)); // empty
+            std::fs::write(&bin, "x").unwrap();
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(!looks_installed(&bin)); // not executable
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        #[cfg(not(unix))]
+        {
+            assert!(!looks_installed(&bin)); // empty
+            std::fs::write(&bin, "x").unwrap();
+        }
+        assert!(looks_installed(&bin));
+        assert!(!looks_installed(&dir)); // directory
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
