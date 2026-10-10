@@ -111,6 +111,17 @@ button { cursor: pointer; white-space: nowrap; }
 dialog { max-height: calc(100vh - 24px); overflow-y: auto; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 10px;
   width: min(460px, 92vw); padding: 16px; }
 dialog::backdrop { background: rgba(0, 0, 0, .45); }
+/* playlist choice: two stacked option cards, the safe one highlighted, quiet Cancel */
+#playlist-dialog { width: min(340px, 92vw); padding: 18px; }
+#playlist-dialog h2 { margin: 0 0 4px; font-size: 16px; }
+#playlist-dialog .about { margin: 0 0 6px; font-size: 13px; }
+#playlist-dialog .opt { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%;
+  margin-top: 8px; padding: 10px 12px; border-radius: 10px; text-align: left; white-space: normal; }
+#playlist-dialog .opt span { color: var(--muted); font-size: 12px; }
+#playlist-dialog .opt:hover { border-color: var(--muted); }
+#playlist-dialog .opt.primary { border: 1.5px solid var(--brand); }
+#playlist-dialog .link { padding: 4px 8px; border: 0; background: none; color: var(--muted); }
+#playlist-dialog .link:hover { color: var(--fg); }
 .about { color: var(--muted); font-size: 12px; }
 fieldset { min-width: 0; margin: 12px 0 0; padding: 0 12px 12px; border: 1px solid var(--line); border-radius: 6px; }
 legend { padding: 0 6px; font-weight: 600; }

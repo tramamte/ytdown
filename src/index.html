@@ -42,12 +42,11 @@
 
   <dialog id="playlist-dialog">
     <form method="dialog">
-      <p>This link is part of a playlist.</p>
-      <div class="row">
-        <button value="single">This video only</button>
-        <button value="all">Whole playlist</button>
-        <button value="">Cancel</button>
-      </div>
+      <h2>Playlist link</h2>
+      <p class="about">Download just this video, or the whole playlist?</p>
+      <button value="single" class="opt primary" autofocus><b>This video only</b><span>The video in the link</span></button>
+      <button value="all" class="opt"><b>Whole playlist</b><span>Every video in the playlist, one by one</span></button>
+      <div class="row end"><button value="" class="link">Cancel</button></div>
     </form>
   </dialog>
 
