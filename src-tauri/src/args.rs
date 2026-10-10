@@ -18,7 +18,7 @@ pub fn build(kind: Kind, url: &str, playlist: bool, s: &Settings, ffmpeg: &Path,
         "--ffmpeg-location".into(), ffmpeg.display().to_string(),
         "--js-runtimes".into(), format!("deno:{}", deno.display()),
         "-P".into(), format!("temp:{}", tmp.display()),
-        "-P".into(), s.download_dir.display().to_string(),
+        "-P".into(), format!("home:{}", s.download_dir.display()),
         // keep -o relative: an absolute -o makes yt-dlp ignore -P
         "-o".into(), "%(title)s.%(ext)s".into(),
         (if playlist { "--yes-playlist" } else { "--no-playlist" }).into(),
@@ -55,6 +55,8 @@ mod tests {
         assert!(has_pair(&a, ["--js-runtimes", "deno:/deno"]));
         assert!(has_pair(&a, ["-o", "%(title)s.%(ext)s"]));
         assert!(has_pair(&a, ["--encoding", "utf-8"]));
+        assert!(has_pair(&a, ["-P", "home:/dl"]));
+        assert!(has_pair(&a, ["-P", "temp:/tmp/1"]));
         assert_eq!(&a[a.len() - 2..], ["--", "https://youtu.be/x"]);
     }
     #[test]
