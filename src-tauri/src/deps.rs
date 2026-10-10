@@ -6,7 +6,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::AsyncWriteExt;
 
@@ -236,8 +236,8 @@ async fn runs_ok(path: &Path, arg: &str) -> bool {
     path.exists() && command(path).arg(arg).output().await.is_ok_and(|o| o.status.success())
 }
 
-/// Non-empty (unix: executable) regular file. For yt-dlp at launch: running it takes seconds
-/// (the one-file build unpacks itself), so the real health probe is the background check.
+/// Non-empty (unix: executable) regular file. The launch check: running the tools there would
+/// delay startup; they are probed (and repaired) at download time instead.
 fn looks_installed(path: &Path) -> bool {
     let Ok(m) = std::fs::metadata(path) else { return false };
     #[cfg(unix)]
@@ -404,8 +404,8 @@ async fn update(app: &AppHandle) -> Result<(), String> {
 
 static APPLIED: AtomicBool = AtomicBool::new(false);
 
-/// `probe_ytdlp`: run yt-dlp to check it (slow); otherwise only check the file is there.
-async fn ensure(app: &AppHandle, probe_ytdlp: bool) -> Result<(), String> {
+/// `probe`: run each binary to check it (yt-dlp is slow); otherwise only check the files are there.
+async fn ensure(app: &AppHandle, probe: bool) -> Result<(), String> {
     std::fs::create_dir_all(bin_dir(app)).map_err(|e| e.to_string())?;
     // Only on the first call (launch): later calls must not swap a binary that may be running.
     if !APPLIED.swap(true, Ordering::SeqCst) {
@@ -416,13 +416,53 @@ async fn ensure(app: &AppHandle, probe_ytdlp: bool) -> Result<(), String> {
         ("ffmpeg", ffmpeg_path(app), "-version", ffmpeg_source),
         ("deno", deno_path(app), "--version", deno_source),
     ] {
-        let ok = if name == "yt-dlp" && !probe_ytdlp { looks_installed(&path) } else { runs_ok(&path, arg).await };
+        let ok = if probe { runs_ok(&path, arg).await } else { looks_installed(&path) };
         if !ok {
             emit(app, "working", &format!("Downloading {name}…"));
             install(name, source()?, &path).await?;
         }
     }
     Ok(())
+}
+
+/// Download time: probes ffmpeg and deno (fast) and reinstalls a broken one.
+pub async fn repair_fast_tools(app: &AppHandle) -> Result<(), String> {
+    for (name, path, arg, source) in [
+        ("ffmpeg", ffmpeg_path(app), "-version", ffmpeg_source as fn() -> Result<Source, String>),
+        ("deno", deno_path(app), "--version", deno_source),
+    ] {
+        if runs_ok(&path, arg).await { continue; }
+        let _guard = RUNNING.lock().await;
+        // a concurrent job may have repaired it while we waited
+        if !runs_ok(&path, arg).await {
+            reinstall(app, name, source()?, &path).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Identity of a binary file, to tell whether it was replaced since a job ran it.
+pub fn stamp(path: &Path) -> Option<(SystemTime, u64)> {
+    let m = std::fs::metadata(path).ok()?;
+    Some((m.modified().ok()?, m.len()))
+}
+
+/// Reinstalls a yt-dlp that failed to start, unless it was replaced since `seen` (another job,
+/// the background check or Update already did it).
+pub async fn repair_ytdlp_since(app: &AppHandle, seen: Option<(SystemTime, u64)>) -> Result<(), String> {
+    let _guard = RUNNING.lock().await;
+    let path = ytdlp_path(app);
+    if stamp(&path) != seen { return Ok(()); }
+    reinstall(app, "yt-dlp", ytdlp_source(YTDLP_BASE)?, &path).await
+}
+
+/// Caller holds RUNNING. On failure input stays usable; the job reports the error.
+async fn reinstall(app: &AppHandle, name: &str, src: Source, path: &Path) -> Result<(), String> {
+    log::warn!("{name} does not run; reinstalling");
+    emit(app, "working", &format!("Repairing {name}…"));
+    let r = install(name, src, path).await.map_err(|e| format!("Could not repair {name}: {e}"));
+    emit(app, "ready", r.as_ref().err().map_or("", String::as_str));
+    r
 }
 
 #[cfg(test)]

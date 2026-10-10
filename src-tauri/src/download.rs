@@ -101,8 +101,35 @@ async fn job(app: &AppHandle, sem: &Arc<Semaphore>, tok: &CancellationToken, ev:
     if let Err(e) = tokio::fs::create_dir_all(tmp).await {
         return ("error", e.to_string());
     }
+    // ffmpeg/deno: fast probe (reinstalled if broken). Not cancellable mid-install.
+    if let Err(e) = deps::repair_fast_tools(app).await {
+        return ("error", e);
+    }
+    if tok.is_cancelled() {
+        return CANCELED;
+    }
     let s = settings::load(app);
     let a = args::build(ev.kind, url, playlist, &s, &deps::ffmpeg_path(app), &deps::deno_path(app), tmp);
+    // yt-dlp has no cheap probe: judge it by the real run, repair and retry once.
+    let seen = deps::stamp(&deps::ytdlp_path(app));
+    match run(app, tok, ev, &a).await {
+        Some(r) => r,
+        None => {
+            if let Err(e) = deps::repair_ytdlp_since(app, seen).await {
+                return ("error", format!("{BROKEN} ({e})"));
+            }
+            if tok.is_cancelled() {
+                return CANCELED;
+            }
+            run(app, tok, ev, &a).await.unwrap_or_else(|| ("error", BROKEN.into()))
+        }
+    }
+}
+
+const BROKEN: &str = "yt-dlp could not be started. Use Settings → Update to reinstall.";
+
+/// Runs yt-dlp once. None = it never started (see `never_started`).
+async fn run(app: &AppHandle, tok: &CancellationToken, ev: &mut Update, a: &[String]) -> Option<(&'static str, String)> {
     let mut cmd = deps::command(&deps::ytdlp_path(app));
     // own process group so cancel reaches the PyInstaller launcher's real yt-dlp child (and ffmpeg)
     #[cfg(unix)]
@@ -111,7 +138,10 @@ async fn job(app: &AppHandle, sem: &Arc<Semaphore>, tok: &CancellationToken, ev:
         .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped())
         .kill_on_drop(true).spawn() { // kill_on_drop: last-resort fallback (launcher only)
         Ok(c) => c,
-        Err(e) => return ("error", format!("Failed to start yt-dlp: {e}")),
+        Err(e) => {
+            log::warn!("Failed to start yt-dlp: {e}");
+            return None;
+        }
     };
     let mut out = BufReader::new(child.stdout.take().expect("piped stdout"));
     let mut err = BufReader::new(child.stderr.take().expect("piped stderr"));
@@ -121,12 +151,14 @@ async fn job(app: &AppHandle, sem: &Arc<Semaphore>, tok: &CancellationToken, ev:
     // because read_until keeps partially read bytes in them when cancelled.
     let (mut ob, mut eb) = (Vec::new(), Vec::new());
     let mut tail: Vec<String> = Vec::new();
+    let mut out_lines = 0;
 
     // drain both pipes concurrently (a full pipe would block yt-dlp), then reap
     let status = loop {
         tokio::select! {
             r = out.read_until(b'\n', &mut ob), if !out_done => match r {
                 Ok(n) if n > 0 => {
+                    out_lines += 1;
                     match progress::parse(&decode(&ob)) {
                         Some(Line::Title(t)) => { ev.title = t; emit(app, ev) }
                         Some(Line::Percent(p)) => { ev.percent = p; emit(app, ev) }
@@ -150,15 +182,27 @@ async fn job(app: &AppHandle, sem: &Arc<Semaphore>, tok: &CancellationToken, ev:
             s = child.wait(), if out_done && err_done => break s,
             _ = tok.cancelled() => {
                 kill_tree(&mut child).await;
-                return CANCELED;
+                return Some(CANCELED);
             }
         }
     };
-    match status {
+    Some(match status {
         Ok(s) if s.success() => ("done", String::new()),
+        Ok(s) if never_started(true, false, out_lines, &tail) => {
+            log::warn!("yt-dlp did not start: {}", failure_message(&tail, s.code()));
+            return None;
+        }
         Ok(s) => ("error", failure_message(&tail, s.code())),
         Err(e) => ("error", e.to_string()),
-    }
+    })
+}
+
+/// yt-dlp failed before printing anything of its own (e.g. PyInstaller bootloader error):
+/// treat the binary as broken. Ordinary yt-dlp failures print `ERROR:`/`WARNING:`/`[extractor]`.
+fn never_started(spawned: bool, success: bool, stdout_lines: usize, stderr: &[String]) -> bool {
+    let own = |l: &String| l.starts_with("ERROR:") || l.starts_with("WARNING:")
+        || (l.starts_with('[') && !l.starts_with("[PYI"));
+    !spawned || (!success && stdout_lines == 0 && !stderr.iter().any(own))
 }
 
 /// Kills `child` and all its descendants, then reaps it.
@@ -236,6 +280,19 @@ mod tests {
         assert_eq!(decode(b"ytdown: 42.3%\r\n"), "ytdown: 42.3%");
         assert_eq!(decode(b"ytdown-title:\xc7\xd1 x\n"), "ytdown-title:\u{FFFD}\u{FFFD} x");
         assert_eq!(decode(b"no newline"), "no newline");
+    }
+
+    #[test]
+    fn detects_ytdlp_that_never_started() {
+        let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(never_started(false, false, 0, &[])); // spawn error
+        assert!(never_started(true, false, 0, &[])); // exit != 0, no output
+        assert!(never_started(true, false, 0, &v(&["[PYI-123:ERROR] Failed to extract x"]))); // bootloader
+        assert!(!never_started(true, false, 0, &v(&["ERROR: [youtube] abc: Video unavailable"])));
+        assert!(!never_started(true, false, 0, &v(&["WARNING: x", "Traceback ..."])));
+        assert!(!never_started(true, false, 0, &v(&["[youtube] abc: Downloading webpage"])));
+        assert!(!never_started(true, false, 3, &[])); // printed to stdout
+        assert!(!never_started(true, true, 0, &[])); // exit 0
     }
 
     #[test]
