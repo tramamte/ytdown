@@ -343,13 +343,11 @@ pub async fn update_deps(app: AppHandle) -> Result<(), String> {
 }
 
 async fn update(app: &AppHandle) -> Result<(), String> {
-    // "checking" keeps URL input enabled; only ensure()'s installs emit "working".
-    emit(app, "checking", "Checking for updates…");
+    emit(app, "working", "Checking for updates…");
     if let Err(e) = ensure(app).await {
         emit(app, "error", &e);
         return Err(e);
     }
-    emit(app, "checking", "Checking for updates…");
     let ytdlp = ytdlp_path(app);
     // stage_update reuses an already-staged latest build instead of re-downloading.
     match stage_update(app).await {

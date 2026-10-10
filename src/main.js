@@ -31,9 +31,7 @@ function setBanner({ state, message }) {
   $("#banner-text").textContent = message || "";
   $("#banner-retry").hidden = state !== "error";
   $("#banner-close").hidden = !usable;
-  // "checking" (manual update) shows the info spinner but keeps input enabled
-  const blocked = state === "working" || state === "error";
-  document.querySelectorAll(".url").forEach((i) => (i.disabled = blocked));
+  document.querySelectorAll(".url").forEach((i) => (i.disabled = !usable));
 }
 $("#banner-retry").onclick = () => invoke("ensure_deps").catch(() => {});
 $("#banner-close").onclick = () => ($("#banner").hidden = true);
