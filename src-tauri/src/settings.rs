@@ -18,18 +18,66 @@ impl Settings {
     }
 }
 
-fn path(app: &AppHandle) -> PathBuf {
-    app.path().app_config_dir().expect("config dir").join("settings.json")
+fn path(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path().app_config_dir().map(|d| d.join("settings.json")).map_err(|e| e.to_string())
 }
 
 pub fn load(app: &AppHandle) -> Settings {
-    std::fs::read(path(app)).ok()
+    path(app).ok().and_then(|p| std::fs::read(p).ok())
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_else(|| Settings::new(app.path().download_dir().unwrap_or_default()))
 }
 
 pub fn save(app: &AppHandle, s: &Settings) -> Result<(), String> {
-    let p = path(app);
-    std::fs::create_dir_all(p.parent().unwrap()).map_err(|e| e.to_string())?;
-    std::fs::write(p, serde_json::to_vec_pretty(s).unwrap()).map_err(|e| e.to_string())
+    let p = path(app)?;
+    std::fs::create_dir_all(p.parent().ok_or("config dir: no parent")?).map_err(|e| e.to_string())?;
+    std::fs::write(p, serde_json::to_vec_pretty(s).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+}
+
+pub fn validate(s: &Settings) -> Result<(), String> {
+    if !["mp4", "mkv", "webm"].contains(&s.container.as_str()) {
+        return Err(format!("container: unsupported value {:?}", s.container));
+    }
+    if !["mp3", "m4a", "opus", "flac", "wav"].contains(&s.audio_format.as_str()) {
+        return Err(format!("audio_format: unsupported value {:?}", s.audio_format));
+    }
+    if !matches!(s.quality, None | Some(2160 | 1440 | 1080 | 720 | 480 | 360)) {
+        return Err("quality: unsupported value".into());
+    }
+    if !s.download_dir.is_absolute() || !s.download_dir.is_dir() {
+        return Err("download_dir: must be an absolute path to an existing directory".into());
+    }
+    if s.shortcut.is_empty() {
+        return Err("shortcut: must not be empty".into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ok() -> Settings { Settings::new(std::env::temp_dir()) }
+    fn err(s: Settings, field: &str) {
+        let e = validate(&s).unwrap_err();
+        assert!(e.starts_with(&format!("{field}: ")), "{e}");
+    }
+
+    #[test]
+    fn valid_default() { assert!(validate(&ok()).is_ok()); }
+
+    #[test]
+    fn invalid_fields() {
+        err(Settings { container: "avi".into(), ..ok() }, "container");
+        err(Settings { audio_format: "ogg".into(), ..ok() }, "audio_format");
+        err(Settings { quality: Some(999), ..ok() }, "quality");
+        err(Settings { download_dir: "relative".into(), ..ok() }, "download_dir");
+        err(Settings { download_dir: std::env::temp_dir().join("ytdown-nope-xyz"), ..ok() }, "download_dir");
+        err(Settings { shortcut: "".into(), ..ok() }, "shortcut");
+    }
+
+    #[test]
+    fn valid_quality() {
+        assert!(validate(&Settings { quality: Some(1080), ..ok() }).is_ok());
+    }
 }

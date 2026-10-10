@@ -28,10 +28,6 @@ pub fn command(path: &Path) -> tokio::process::Command {
     cmd
 }
 
-pub fn verify_sha256(bytes: &[u8], expected_hex: &str) -> bool {
-    hex_eq(&hex::encode(Sha256::digest(bytes)), expected_hex)
-}
-
 fn hex_eq(actual: &str, expected: &str) -> bool {
     actual.eq_ignore_ascii_case(expected.trim())
 }
@@ -280,6 +276,10 @@ async fn ensure(app: &AppHandle) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn verify_sha256(bytes: &[u8], expected_hex: &str) -> bool {
+        hex_eq(&hex::encode(Sha256::digest(bytes)), expected_hex)
+    }
 
     #[test]
     fn sha256_verify() {
