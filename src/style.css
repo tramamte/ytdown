@@ -108,6 +108,16 @@ button { cursor: pointer; white-space: nowrap; }
 #list progress::-webkit-progress-bar { background: var(--line); border-radius: 3px; }
 #list progress::-webkit-progress-value { background: var(--accent); border-radius: 3px; }
 #list .msg { grid-column: 1 / -1; color: var(--err); font-size: 12px; }
+/* playlist items: nested under the playlist row, compact and indented; state shown by the left bar only */
+#list .items { grid-column: 1 / -1; list-style: none; margin: 4px 0 0; padding: 0 0 0 8px; }
+#list .items li[data-state] { margin: 4px 0 0; padding: 2px 0 2px 8px; background: none; border: 0;
+  border-left: 2px solid var(--line); border-radius: 0; }
+#list .items li[data-state="running"] { border-left-color: var(--accent); }
+#list .items li[data-state="done"] { border-left-color: var(--ok); }
+#list .items li[data-state="error"] { border-left-color: var(--err); }
+#list .items .title { font-weight: 400; font-size: 13px; }
+#list .items progress { height: 3px; }
+#list .items li:not([data-state="running"]) progress { display: none; }
 dialog { max-height: calc(100vh - 24px); overflow-y: auto; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 10px;
   width: min(460px, 92vw); padding: 16px; }
 dialog::backdrop { background: rgba(0, 0, 0, .45); }

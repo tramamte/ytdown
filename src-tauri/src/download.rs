@@ -14,6 +14,7 @@ use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
 const EVENT: &str = "download://update";
+const ITEM_EVENT: &str = "download://item";
 const CANCELED: (&str, String) = ("canceled", String::new());
 
 pub struct Manager {
@@ -56,6 +57,136 @@ struct Update {
     stage: u32, // 1-based index of the stream being downloaded; 0 if unknown
     stages: u32, // number of streams of the item; 0 if unknown
     stream: &'static str, // "video" | "audio" | "" if unknown
+    playlist: bool,
+    items_done: u32,
+    items_failed: u32,
+    items_total: u32, // 0 if unknown
+}
+
+/// Child row of a playlist job (`download://item`).
+#[derive(Serialize, Clone, Debug)]
+struct Item {
+    job_id: u64,
+    index: u32, // playlist_index; 0 if unknown
+    title: String,
+    kind: Kind,
+    state: &'static str, // "running" | "done" | "error" | "canceled"
+    percent: f32,
+    stage: u32,
+    stages: u32,
+    stream: &'static str,
+    size: u64,
+    message: String,
+}
+
+/// State of one yt-dlp run, fed line by line. No I/O, so captured runs can be replayed in tests.
+/// Playlist jobs: yt-dlp downloads the items one after another, so at most the last row is running.
+#[derive(Default)]
+struct Tracker {
+    files: Vec<String>,
+    formats: Vec<String>,
+    max: (String, f32),
+    items: Vec<Item>,
+}
+
+impl Tracker {
+    fn running(&mut self) -> Option<&mut Item> {
+        self.items.last_mut().filter(|i| i.state == "running")
+    }
+
+    fn push(&mut self, ev: &Update, index: u32) {
+        self.items.push(Item { job_id: ev.id, index, title: String::new(), kind: ev.kind, state: "running",
+            percent: 0.0, stage: 0, stages: 0, stream: "", size: 0, message: String::new() });
+    }
+
+    /// Applies a stdout line. Returns (parent changed, child row to emit).
+    /// Single videos update the parent as before; playlist jobs update the running child.
+    fn stdout(&mut self, ev: &mut Update, l: Line) -> (bool, Option<Item>) {
+        match l {
+            Line::Item { index, total, playlist_title } => {
+                if !playlist_title.is_empty() { ev.title = playlist_title; }
+                ev.items_total = total;
+                self.push(ev, index);
+            }
+            Line::Title(t) => {
+                if !ev.playlist { ev.title = t; return (true, None) }
+                let Some(it) = self.running() else { return (false, None) };
+                it.title = t;
+            }
+            Line::Formats(f) => { self.formats = f; self.max = Default::default(); return (false, None) }
+            Line::Progress { percent, format_id, is_video } => {
+                let p = (
+                    monotonic(&mut self.max, &format_id, percent),
+                    self.formats.iter().position(|f| *f == format_id).map_or(0, |i| i as u32 + 1),
+                    self.formats.len() as u32,
+                    if is_video { "video" } else { "audio" },
+                );
+                if !ev.playlist { (ev.percent, ev.stage, ev.stages, ev.stream) = p; return (true, None) }
+                let Some(it) = self.running() else { return (false, None) };
+                (it.percent, it.stage, it.stages, it.stream) = p;
+            }
+            Line::File(f) => {
+                let size = total_size(std::slice::from_ref(&f));
+                self.files.push(f);
+                let Some(it) = self.running() else { return (false, None) };
+                (it.state, it.size, it.percent) = ("done", size, 100.0);
+                ev.items_done += 1;
+            }
+        }
+        self.update_percent(ev);
+        (true, self.items.last().cloned())
+    }
+
+    /// An `ERROR:` line of a playlist job fails the running item, or else an item that failed
+    /// before it started (e.g. unavailable: yt-dlp prints no ytdown-item line for it) and
+    /// yt-dlp moves on to the next one.
+    // ponytail: assumes the ERROR line is read before the next item's stdout lines (yt-dlp writes it
+    // before extracting the next item); a pipe-read race would blame the next item instead
+    fn stderr(&mut self, ev: &mut Update, l: &str) -> Option<Item> {
+        if !ev.playlist || !l.starts_with("ERROR:") { return None }
+        if self.running().is_none() {
+            let next = self.items.last().map_or(1, |i| i.index + 1);
+            self.push(ev, next);
+        }
+        let it = self.items.last_mut()?;
+        (it.state, it.message) = ("error", failure_message(&[l.to_string()], None));
+        ev.items_failed += 1;
+        self.update_percent(ev);
+        self.items.last().cloned()
+    }
+
+    /// Ends the running item (canceled, or the run ended without its file/ERROR line).
+    fn settle(&mut self, ev: &mut Update, state: &'static str) -> Option<Item> {
+        let it = self.running()?;
+        it.state = state;
+        let it = it.clone();
+        match state { "done" => ev.items_done += 1, "error" => ev.items_failed += 1, _ => {} }
+        Some(it)
+    }
+
+    /// Parent percent of a playlist job: finished items plus the running item's share; never decreases.
+    fn update_percent(&self, ev: &mut Update) {
+        if ev.items_total == 0 { return }
+        let cur = self.items.last().filter(|i| i.state == "running").map_or(0.0, |i| match i.stage {
+            0 => i.percent / 100.0,
+            s => ((s - 1) as f32 + i.percent / 100.0) / i.stages as f32,
+        });
+        let p = ((ev.items_done + ev.items_failed) as f32 + cur) / ev.items_total as f32 * 100.0;
+        ev.percent = ev.percent.max(p.min(100.0));
+    }
+
+    /// Final state of a playlist job: some items failed → done with a note; none succeeded → error.
+    fn outcome(&self, ev: &mut Update, ok: bool, failure: String) -> (&'static str, String) {
+        ev.size = total_size(&self.files);
+        let total = if ev.items_total > 0 { ev.items_total } else { self.items.len() as u32 };
+        if ok && ev.items_failed == 0 {
+            ("done", String::new())
+        } else if ev.items_done == 0 || ev.items_failed == 0 {
+            ("error", failure)
+        } else {
+            ("done", format!("{} of {total} failed", ev.items_failed))
+        }
+    }
 }
 
 #[tauri::command]
@@ -75,7 +206,8 @@ pub fn start_download(app: AppHandle, state: State<'_, Manager>, url: String, ki
     let tok = CancellationToken::new();
     state.jobs.lock().unwrap().insert(id, tok.clone());
     let url = url.trim().to_string();
-    let ev = Update { id, title: url.clone(), kind, state: "queued", percent: 0.0, message: String::new(), size: 0, stage: 0, stages: 0, stream: "" };
+    let ev = Update { id, title: url.clone(), kind, state: "queued", percent: 0.0, message: String::new(), size: 0, stage: 0, stages: 0, stream: "",
+                     playlist, items_done: 0, items_failed: 0, items_total: 0 };
     tauri::async_runtime::spawn(run_job(app, state.sem.clone(), tok, ev, url, playlist));
     Ok(id)
 }
@@ -89,6 +221,10 @@ pub fn cancel_download(state: State<'_, Manager>, id: u64) {
 
 fn emit(app: &AppHandle, ev: &Update) {
     let _ = app.emit(EVENT, ev);
+}
+
+fn emit_item(app: &AppHandle, it: &Item) {
+    let _ = app.emit(ITEM_EVENT, it);
 }
 
 async fn run_job(app: AppHandle, sem: Arc<Semaphore>, tok: CancellationToken, mut ev: Update, url: String, playlist: bool) {
@@ -172,9 +308,7 @@ async fn run(app: &AppHandle, tok: &CancellationToken, ev: &mut Update, a: &[Str
     let (mut ob, mut eb) = (Vec::new(), Vec::new());
     let mut tail: Vec<String> = Vec::new();
     let (mut out_lines, mut spoke) = (0, false);
-    let mut files: Vec<String> = Vec::new();
-    let mut formats: Vec<String> = Vec::new();
-    let mut max = (String::new(), 0.0f32);
+    let mut t = Tracker::default();
 
     // drain both pipes concurrently (a full pipe would block yt-dlp), then reap
     let status = loop {
@@ -182,18 +316,10 @@ async fn run(app: &AppHandle, tok: &CancellationToken, ev: &mut Update, a: &[Str
             r = out.read_until(b'\n', &mut ob), if !out_done => match r {
                 Ok(n) if n > 0 => {
                     out_lines += 1;
-                    match progress::parse(&decode(&ob)) {
-                        Some(Line::Title(t)) => { ev.title = t; emit(app, ev) }
-                        Some(Line::Formats(f)) => { formats = f; max = Default::default() }
-                        Some(Line::Progress { percent, format_id, is_video }) => {
-                            ev.percent = monotonic(&mut max, &format_id, percent);
-                            ev.stage = formats.iter().position(|f| *f == format_id).map_or(0, |i| i as u32 + 1);
-                            ev.stages = formats.len() as u32;
-                            ev.stream = if is_video { "video" } else { "audio" };
-                            emit(app, ev)
-                        }
-                        Some(Line::File(f)) => files.push(f),
-                        None => {}
+                    if let Some(l) = progress::parse(&decode(&ob)) {
+                        let (parent, item) = t.stdout(ev, l);
+                        if parent { emit(app, ev) }
+                        if let Some(it) = item { emit_item(app, &it) }
                     }
                     ob.clear();
                 }
@@ -204,6 +330,7 @@ async fn run(app: &AppHandle, tok: &CancellationToken, ev: &mut Update, a: &[Str
                     let l = decode(&eb);
                     eb.clear();
                     spoke |= own_line(&l);
+                    if let Some(it) = t.stderr(ev, &l) { emit(app, ev); emit_item(app, &it) }
                     if !l.trim().is_empty() {
                         if tail.len() == 5 { tail.remove(0); }
                         tail.push(l);
@@ -214,18 +341,26 @@ async fn run(app: &AppHandle, tok: &CancellationToken, ev: &mut Update, a: &[Str
             s = child.wait(), if out_done && err_done => break s,
             _ = tok.cancelled() => {
                 kill_tree(&mut child).await;
+                if let Some(it) = t.settle(ev, "canceled") { emit_item(app, &it) }
                 return Some(CANCELED);
             }
         }
     };
     Some(match status {
-        Ok(s) if s.success() => {
-            ev.size = total_size(&files);
-            ("done", String::new())
-        }
+        // the retry-once after None cannot duplicate child rows: rows only come from stdout
+        // lines or own stderr lines, both of which rule out never_started
         Ok(s) if never_started(true, s.code(), out_lines, spoke) => {
+            debug_assert!(t.items.is_empty());
             log::warn!("yt-dlp did not start: {}", failure_message(&tail, s.code()));
             return None;
+        }
+        Ok(s) if ev.playlist => {
+            if let Some(it) = t.settle(ev, if s.success() { "done" } else { "error" }) { emit_item(app, &it) }
+            t.outcome(ev, s.success(), failure_message(&tail, s.code()))
+        }
+        Ok(s) if s.success() => {
+            ev.size = total_size(&t.files);
+            ("done", String::new())
         }
         Ok(s) => ("error", failure_message(&tail, s.code())),
         Err(e) => ("error", e.to_string()),
@@ -350,6 +485,124 @@ mod tests {
         let paths = vec![a.display().to_string(), b.display().to_string(), d.join("missing").display().to_string()];
         assert_eq!(total_size(&paths), 15);
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    fn update(playlist: bool) -> Update {
+        Update { id: 7, title: "url".into(), kind: Kind::Audio, state: "running", percent: 0.0, message: String::new(),
+                 size: 0, stage: 0, stages: 0, stream: "", playlist, items_done: 0, items_failed: 0, items_total: 0 }
+    }
+    /// Feeds captured lines ("E:" = stderr); returns the child rows in emit order.
+    fn replay(t: &mut Tracker, ev: &mut Update, lines: &[String]) -> Vec<Item> {
+        let mut out = Vec::new();
+        for l in lines {
+            out.extend(match l.strip_prefix("E:") {
+                Some(e) => t.stderr(ev, e),
+                None => progress::parse(l).and_then(|x| t.stdout(ev, x).1),
+            });
+        }
+        out
+    }
+    fn lines(a: &[&str]) -> Vec<String> { a.iter().map(|s| s.to_string()).collect() }
+    fn temp_files(name: &str, sizes: &[usize]) -> (std::path::PathBuf, Vec<String>) {
+        let d = std::env::temp_dir().join(format!("ytdown-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let p = sizes.iter().enumerate().map(|(i, n)| {
+            let f = d.join(format!("{i}.mkv"));
+            std::fs::write(&f, vec![0u8; *n]).unwrap();
+            f.display().to_string()
+        }).collect();
+        (d, p)
+    }
+
+    #[test]
+    fn playlist_items_done_in_order() {
+        let (d, f) = temp_files("pl-ok", &[10, 5]);
+        // captured from yt-dlp 2026.08.19 (PLr-mgdpse3TpWFoJm99Y9RkXcL6r1RaWM, default video settings), trimmed
+        let l = lines(&["ytdown-item:1|6|5 Seconds Countdown Timer with Soundeffect", "ytdown-title:Five A",
+            "ytdown-formats:136+251", "ytdown: 60.1%|136|avc1.64001F|NA|NA", "ytdown:100.0%|136|avc1.64001F|NA|NA",
+            "ytdown:  1.0%|251|none|NA|NA", "ytdown:100.0%|251|none|NA|NA", &format!("ytdown-file:{}", f[0]),
+            "ytdown-item:2|6|5 Seconds Countdown Timer with Soundeffect", "ytdown-title:Five B",
+            "ytdown-formats:136+251", "ytdown: 86.1%|136|avc1.64001F|NA|NA", &format!("ytdown-file:{}", f[1])]);
+        let (mut t, mut ev) = (Tracker::default(), update(true));
+        let rows = replay(&mut t, &mut ev, &l);
+        assert_eq!(ev.title, "5 Seconds Countdown Timer with Soundeffect");
+        assert_eq!((ev.items_done, ev.items_failed, ev.items_total), (2, 0, 6));
+        assert!((ev.percent - 200.0 / 6.0).abs() < 0.01, "{}", ev.percent);
+        assert_eq!(rows.first().map(|r| (r.index, r.state, r.title.as_str())), Some((1, "running", "")));
+        let last: Vec<_> = t.items.iter().map(|r| (r.job_id, r.index, r.title.as_str(), r.state, r.size)).collect();
+        assert_eq!(last, [(7, 1, "Five A", "done", 10), (7, 2, "Five B", "done", 5)]);
+        assert_eq!(t.outcome(&mut ev, true, "x".into()), ("done", String::new()));
+        assert_eq!(ev.size, 15);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn playlist_item_progress_and_parent_percent() {
+        let (mut t, mut ev) = (Tracker::default(), update(true));
+        fn feed(t: &mut Tracker, ev: &mut Update, l: &str) -> (bool, Option<(f32, u32, u32, &'static str)>) {
+            let r = t.stdout(ev, progress::parse(l).unwrap());
+            (r.0, r.1.map(|i| (i.percent, i.stage, i.stages, i.stream)))
+        }
+        assert_eq!(feed(&mut t, &mut ev, "ytdown-item:1|2|P").1, Some((0.0, 0, 0, "")));
+        feed(&mut t, &mut ev, "ytdown-formats:136+251");
+        assert_eq!(feed(&mut t, &mut ev, "ytdown: 50.0%|136|avc1|NA|NA"), (true, Some((50.0, 1, 2, "video"))));
+        assert_eq!(ev.percent, 12.5); // (0 finished + 0.5 of stage 1/2 → 0.25) / 2
+        feed(&mut t, &mut ev, "ytdown: 40.0%|136|avc1|NA|NA"); // backward step held
+        assert_eq!(ev.percent, 12.5);
+        feed(&mut t, &mut ev, "ytdown:  0.0%|251|none|NA|NA");
+        assert_eq!(ev.percent, 25.0);
+        assert_eq!((ev.stage, ev.stages, ev.stream), (0, 0, "")); // parent shows items, not streams
+    }
+
+    #[test]
+    fn playlist_failed_item_does_not_stop_the_rest() {
+        let (d, f) = temp_files("pl-fail", &[3, 4]);
+        // captured from yt-dlp 2026.08.19 (PLW7B4PyySHApSUCjSpXzBd6LXT8IhjvH9, audio): item 5 is unavailable,
+        // fails before before_dl (no ytdown-item line), yt-dlp continues and exits 1
+        let l = lines(&["ytdown-item:4|7|gallery 23:5 seconds countdown", "ytdown-title:23 Second Countdown",
+            "ytdown-formats:140", "ytdown:  0.3%|140|none|NA|NA", &format!("ytdown-file:{}", f[0]),
+            "E:ERROR: [youtube] Eb8yXfxT1hw: Video unavailable",
+            "ytdown-item:6|7|gallery 23:5 seconds countdown", "ytdown-title:23 Second Countdown Timer / iPhone Timer Style",
+            "ytdown-formats:251", &format!("ytdown-file:{}", f[1])]);
+        let (mut t, mut ev) = (Tracker::default(), update(true));
+        replay(&mut t, &mut ev, &l);
+        let rows: Vec<_> = t.items.iter().map(|r| (r.index, r.state, r.message.as_str())).collect();
+        assert_eq!(rows, [(4, "done", ""), (5, "error", "ERROR: [youtube] Eb8yXfxT1hw: Video unavailable"), (6, "done", "")]);
+        assert_eq!((ev.items_done, ev.items_failed, ev.items_total), (2, 1, 7));
+        assert_eq!(t.outcome(&mut ev, false, "x".into()), ("done", "1 of 7 failed".into()));
+        assert_eq!(ev.size, 7);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn playlist_error_while_running_and_none_succeeded() {
+        let (mut t, mut ev) = (Tracker::default(), update(true));
+        let rows = replay(&mut t, &mut ev, &lines(&["ytdown-item:1|1|P", "ytdown-title:A", "ytdown-formats:251",
+            "ytdown: 10.0%|251|none|NA|NA", "E:WARNING: x", "E:ERROR: unable to download video data: HTTP Error 429: Too Many Requests"]));
+        let r = rows.last().unwrap();
+        assert_eq!((r.index, r.title.as_str(), r.state, r.message.as_str()), (1, "A", "error", "Rate limited by YouTube. Retry later."));
+        assert_eq!(t.items.len(), 1);
+        assert_eq!(t.outcome(&mut ev, false, "ERROR: boom".into()), ("error", "ERROR: boom".into()));
+    }
+
+    #[test]
+    fn playlist_cancel_marks_running_item() {
+        let (mut t, mut ev) = (Tracker::default(), update(true));
+        replay(&mut t, &mut ev, &lines(&["ytdown-item:2|3|P", "ytdown: 10.0%|251|none|NA|NA"]));
+        assert_eq!(t.settle(&mut ev, "canceled").map(|r| (r.index, r.state)), Some((2, "canceled")));
+        assert!(t.settle(&mut ev, "canceled").is_none());
+    }
+
+    #[test]
+    fn single_video_has_no_items() {
+        let (mut t, mut ev) = (Tracker::default(), update(false));
+        let rows = replay(&mut t, &mut ev, &lines(&["ytdown-title:My Video", "ytdown-formats:401+251",
+            "ytdown: 40.0%|401|av01|NA|NA", "ytdown: 30.0%|401|av01|NA|NA", "ytdown:  5.0%|251|none|NA|NA",
+            "E:ERROR: something", "ytdown-file:/nonexistent/x.mp4"]));
+        assert!(rows.is_empty() && t.items.is_empty());
+        assert_eq!((ev.title.as_str(), ev.percent, ev.stage, ev.stages, ev.stream), ("My Video", 5.0, 2, 2, "audio"));
+        assert_eq!(t.files, ["/nonexistent/x.mp4"]);
+        assert_eq!((ev.items_done, ev.items_failed, ev.items_total), (0, 0, 0));
     }
 
     #[test]

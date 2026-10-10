@@ -14,6 +14,13 @@ pub fn build(kind: Kind, url: &str, playlist: bool, s: &Settings, ffmpeg: &Path,
         // --print implies --quiet, which would suppress progress lines
         "--progress".into(),
         "--progress-template".into(), "download:ytdown:%(progress._percent_str)s|%(info.format_id)s|%(info.vcodec)s|%(progress.fragment_index)s|%(progress.fragment_count)s".into(),
+    ];
+    if playlist {
+        // starts a child row; printed before the item's title/formats lines.
+        // A failing item doesn't stop the rest (yt-dlp default --no-abort-on-error).
+        a.extend(["--print".into(), "before_dl:ytdown-item:%(playlist_index)s|%(playlist_count)s|%(playlist_title)s".into()]);
+    }
+    a.extend([
         "--print".into(), "before_dl:ytdown-title:%(title)s".into(),
         // stream ids of the item, e.g. "401+251" (merged) or "251"; matched against progress lines
         "--print".into(), "before_dl:ytdown-formats:%(format_id)s".into(),
@@ -26,7 +33,7 @@ pub fn build(kind: Kind, url: &str, playlist: bool, s: &Settings, ffmpeg: &Path,
         // keep -o relative: an absolute -o makes yt-dlp ignore -P
         "-o".into(), "%(title)s.%(ext)s".into(),
         (if playlist { "--yes-playlist" } else { "--no-playlist" }).into(),
-    ];
+    ]);
     match kind {
         Kind::Video => {
             let (v, b) = match s.quality {
@@ -117,6 +124,17 @@ mod tests {
         assert!(a.contains(&"--yes-playlist".to_string()));
         assert!(a.contains(&"--progress".to_string()));
         assert!(has_pair(&a, ["--js-runtimes", "deno:/deno"]));
+        assert!(has_pair(&a, ["--print", ITEM]));
+    }
+    const ITEM: &str = "before_dl:ytdown-item:%(playlist_index)s|%(playlist_count)s|%(playlist_title)s";
+    #[test]
+    fn item_print_only_for_playlists() {
+        let a = build(Kind::Audio, "u", false, &s(), Path::new("/ff"), Path::new("/deno"), Path::new("/t"));
+        assert!(!a.iter().any(|x| x.contains("ytdown-item")));
+        let a = build(Kind::Audio, "u", true, &s(), Path::new("/ff"), Path::new("/deno"), Path::new("/t"));
+        // the item marker must come before the item's title/formats prints
+        let pos = |p: &str| a.iter().position(|x| x == p).unwrap();
+        assert!(pos(ITEM) < pos("before_dl:ytdown-title:%(title)s"));
     }
     #[test]
     fn audio_mp3() {

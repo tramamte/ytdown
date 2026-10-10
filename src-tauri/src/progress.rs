@@ -4,6 +4,8 @@ pub enum Line {
     Progress { percent: f32, format_id: String, is_video: bool },
     Formats(Vec<String>),
     File(String),
+    /// start of a playlist item; 0 / "" when yt-dlp prints NA
+    Item { index: u32, total: u32, playlist_title: String },
 }
 
 pub fn parse(line: &str) -> Option<Line> {
@@ -15,6 +17,13 @@ pub fn parse(line: &str) -> Option<Line> {
     }
     if let Some(f) = line.strip_prefix("ytdown-file:") {
         return Some(Line::File(f.trim().to_string()));
+    }
+    if let Some(f) = line.strip_prefix("ytdown-item:") {
+        let mut it = f.trim().splitn(3, '|');
+        let mut num = || it.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+        let (index, total) = (num(), num());
+        let t = it.next().unwrap_or("");
+        return Some(Line::Item { index, total, playlist_title: if t == "NA" { "" } else { t }.into() });
     }
     let mut it = line.strip_prefix("ytdown:")?.trim().splitn(5, '|');
     let mut percent = it.next()?.trim().trim_end_matches('%').trim().parse().ok()?;
@@ -67,5 +76,13 @@ mod tests {
         assert_eq!(parse("ytdown-formats:395+251"), Some(Line::Formats(vec!["395".into(), "251".into()])));
         assert_eq!(parse("ytdown: 58.1%|395|av01.0.00M.08.0.110.05.01.06.0"), pr(58.1, "395", true));
         assert_eq!(parse("ytdown:  0.4%|251|none"), pr(0.4, "251", false));
+    }
+    #[test]
+    fn parses_playlist_item() {
+        let it = |index, total, t: &str| Some(Line::Item { index, total, playlist_title: t.into() });
+        // captured from yt-dlp 2026.08.19 (PLW7B4PyySHApSUCjSpXzBd6LXT8IhjvH9)
+        assert_eq!(parse("ytdown-item:4|7|gallery 23:5 seconds countdown"), it(4, 7, "gallery 23:5 seconds countdown"));
+        assert_eq!(parse("ytdown-item:001|120|a | b\r"), it(1, 120, "a | b")); // zero-padded index, '|' in title
+        assert_eq!(parse("ytdown-item:NA|NA|NA"), it(0, 0, ""));
     }
 }

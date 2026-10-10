@@ -67,6 +67,14 @@ function formatSize(n) {
     if (n < 1000 || unit === "GB") return `${n.toFixed(1)} ${unit}`;
   }
 }
+// running detail: "Video 1/2 · 40%" while merging streams, else "40%"
+function runDetail(u) {
+  const pct = `${Math.round(u.percent || 0)}%`;
+  return u.stages > 1 && u.stage > 0 ? `${u.stream === "audio" ? "Audio" : "Video"} ${u.stage}/${u.stages} · ${pct}` : pct;
+}
+const status = (u) => u.state === "running" ? runDetail(u)
+  : u.state === "done" && u.size > 0 ? formatSize(u.size) : LABEL[u.state] || u.state;
+const kindLabel = (u) => (u.kind === "audio" ? "Audio" : "Video");
 function render(u) {
   let li = items.get(u.id);
   if (!li) {
@@ -80,19 +88,43 @@ function render(u) {
   const active = u.state === "queued" || u.state === "running";
   li.dataset.state = u.state;
   li.querySelector(".title").textContent = u.title || "(untitled)";
-  const label = u.state === "done" && u.size > 0 ? formatSize(u.size) : LABEL[u.state] || u.state;
-  const kind = u.kind === "audio" ? "Audio" : "Video";
-  let detail = label;
-  if (u.state === "running") {
+  let detail = status(u);
+  if (u.playlist && u.state === "running") {
     const pct = `${Math.round(u.percent || 0)}%`;
-    detail = u.stages > 1 && u.stage > 0 ? `${u.stream === "audio" ? "Audio" : "Video"} ${u.stage}/${u.stages} · ${pct}` : pct;
+    detail = u.items_total ? `${u.items_done}/${u.items_total} · ${pct}` : pct;
+  } else if (u.playlist && u.state === "done") {
+    detail = `${u.items_total} items` + (u.size > 0 ? ` · ${formatSize(u.size)}` : "");
   }
-  li.querySelector(".meta").textContent = `${kind} · ${detail}`;
+  li.querySelector(".meta").textContent = `${u.playlist ? "Playlist" : kindLabel(u)} · ${detail}`;
   const p = li.querySelector("progress");
   if (u.state === "queued") p.removeAttribute("value");
   else p.value = u.state === "done" ? 100 : u.percent || 0;
-  li.querySelector(".msg").textContent = u.state === "error" ? u.message || "" : "";
+  // done + message: some playlist items failed
+  li.querySelector(".msg").textContent = ["error", "done"].includes(u.state) ? u.message || "" : "";
   li.querySelector(".cancel").hidden = !active;
+}
+// playlist item: child row nested in its job's <li>, appended as items start
+function renderItem(c) {
+  const parent = items.get(c.job_id);
+  if (!parent) return;
+  let ul = parent.querySelector(".items");
+  if (!ul) {
+    ul = document.createElement("ul");
+    ul.className = "items";
+    parent.append(ul);
+  }
+  let li = [...ul.children].find((x) => x.dataset.index === String(c.index));
+  if (!li) {
+    li = document.createElement("li");
+    li.dataset.index = c.index;
+    li.innerHTML = '<span class="title"></span><span class="meta"></span><progress max="100"></progress><span class="msg"></span>';
+    ul.append(li);
+  }
+  li.dataset.state = c.state;
+  li.querySelector(".title").textContent = c.title || `Item ${c.index}`;
+  li.querySelector(".meta").textContent = `${kindLabel(c)} · ${status(c)}`;
+  li.querySelector("progress").value = c.percent || 0;
+  li.querySelector(".msg").textContent = c.state === "error" ? c.message || "" : "";
 }
 $("#clear").onclick = () => {
   for (const [id, li] of items) {
@@ -240,6 +272,7 @@ $("#audio-hint").textContent = MAC ? "⌘⇧A toggle · ⇧↩ audio once" : "Ct
   await listen("focus-input", focusUrl);
   window.addEventListener("focus", focusUrl);
   await listen("download://update", ({ payload }) => render(payload));
+  await listen("download://item", ({ payload }) => renderItem(payload));
   fill(await invoke("get_settings"));
   try {
     await invoke("set_shortcut", { accel: current.shortcut });
