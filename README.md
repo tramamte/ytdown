@@ -7,7 +7,9 @@ Desktop app (Tauri v2) for downloading YouTube video or audio by pasting a link.
 Releases are on the GitHub Releases page (macOS, Windows, Ubuntu).
 
 - macOS/Windows builds may be unsigned until signing certificates are configured.
-  On macOS, right-click the app and choose Open the first time.
+  On macOS 15+, open System Settings → Privacy & Security and click "Open Anyway"
+  after the first blocked launch of an unsigned build.
+  On Windows, if SmartScreen blocks the installer, click "More info → Run anyway".
 - On first run the app downloads yt-dlp, ffmpeg and deno into the app data folder.
 - On Ubuntu the global shortcut works on X11 only (not Wayland).
 
