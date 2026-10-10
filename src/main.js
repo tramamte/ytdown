@@ -189,6 +189,22 @@ $("#settings-form").addEventListener("submit", async (e) => {
   }
 });
 
+// ---- settings keys: Ctrl+, (also ⌘, on macOS) opens; inside it Cmd/Ctrl+S saves (Esc closes natively) ----
+// e.code so non-Latin input sources (e.g. Korean) still match. Returns "open" | "save" | null.
+const settingsKey = (e, mac, openId) => {
+  const mod = mac ? e.metaKey : e.ctrlKey;
+  if (e.code === "Comma") return (e.ctrlKey || mod) && !openId ? "open" : null;
+  return mod && e.code === "KeyS" && openId === "settings-dialog" ? "save" : null;
+};
+document.addEventListener("keydown", (e) => {
+  if (e.defaultPrevented) return;  // the shortcut recorder consumed it
+  const a = settingsKey(e, MAC, document.querySelector("dialog[open]")?.id);
+  if (!a) return;
+  e.preventDefault();
+  if (a === "open") $("#open-settings").click();
+  else $("#settings-form").requestSubmit();
+});
+
 // ---- startup (listeners first, then settings, shortcut, deps) ----
 (async () => {
   await listen("deps://status", ({ payload }) => setBanner(payload));
