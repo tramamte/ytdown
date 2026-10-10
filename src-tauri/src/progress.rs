@@ -16,11 +16,17 @@ pub fn parse(line: &str) -> Option<Line> {
     if let Some(f) = line.strip_prefix("ytdown-file:") {
         return Some(Line::File(f.trim().to_string()));
     }
-    let mut it = line.strip_prefix("ytdown:")?.trim().splitn(3, '|');
-    let percent = it.next()?.trim().trim_end_matches('%').trim().parse().ok()?;
+    let mut it = line.strip_prefix("ytdown:")?.trim().splitn(5, '|');
+    let mut percent = it.next()?.trim().trim_end_matches('%').trim().parse().ok()?;
     let format_id = it.next().unwrap_or("").trim().to_string();
     // "none" = audio-only stream; NA/unknown is treated as video
     let is_video = it.next().is_none_or(|v| v.trim() != "none");
+    // fragmented streams (HLS/DASH) have no total size, so yt-dlp's percent is a jittery estimate:
+    // use fragment progress instead when available
+    let mut num = || it.next().and_then(|v| v.trim().parse::<f32>().ok());
+    if let (Some(i), Some(n)) = (num(), num()) && n > 0.0 {
+        percent = (i / n * 100.0).clamp(0.0, 100.0);
+    }
     Some(Line::Progress { percent, format_id, is_video })
 }
 
@@ -40,6 +46,20 @@ mod tests {
         assert_eq!(parse("ytdown-formats:251\r"), Some(Line::Formats(vec!["251".into()])));
         assert_eq!(parse("ytdown-file:/dl/My  Video.mp4\r"), Some(Line::File("/dl/My  Video.mp4".into())));
         assert_eq!(parse("[download] Destination: x"), None);
+    }
+    #[test]
+    fn fragment_progress_replaces_estimate() {
+        let p = |l: &str| match parse(l) { Some(Line::Progress { percent, .. }) => percent, x => panic!("{x:?}") };
+        let near = |a: f32, b: f32| assert!((a - b).abs() < 0.1, "{a} vs {b}");
+        // captured from yt-dlp 2026.08.19 (QWFaZf3MpKk, stream 616 m3u8_native, total size NA)
+        near(p("ytdown:100.0%|616|avc1.640028|0|43"), 0.0);
+        near(p("ytdown:  1.2%|616|avc1.640028|1|43"), 2.3);
+        near(p("ytdown: 11.3%|616|avc1.640028|1|43"), 2.3);
+        near(p("ytdown: 10.1%|616|avc1.640028|1|43"), 2.3);
+        near(p("ytdown: 14.0%|616|avc1.640028|5|43"), 11.6);
+        // known size (https): no fragments, percent unchanged
+        near(p("ytdown: 37.5%|251|none|NA|NA"), 37.5);
+        near(p("ytdown: 37.5%|251|none"), 37.5);
     }
     #[test]
     fn parses_real_ytdlp_lines() {

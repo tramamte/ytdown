@@ -13,7 +13,7 @@ pub fn build(kind: Kind, url: &str, playlist: bool, s: &Settings, ffmpeg: &Path,
         "--encoding".into(), "utf-8".into(),
         // --print implies --quiet, which would suppress progress lines
         "--progress".into(),
-        "--progress-template".into(), "download:ytdown:%(progress._percent_str)s|%(info.format_id)s|%(info.vcodec)s".into(),
+        "--progress-template".into(), "download:ytdown:%(progress._percent_str)s|%(info.format_id)s|%(info.vcodec)s|%(progress.fragment_index)s|%(progress.fragment_count)s".into(),
         "--print".into(), "before_dl:ytdown-title:%(title)s".into(),
         // stream ids of the item, e.g. "401+251" (merged) or "251"; matched against progress lines
         "--print".into(), "before_dl:ytdown-formats:%(format_id)s".into(),
@@ -104,7 +104,7 @@ mod tests {
         assert!(has_pair(&a, ["--print", "after_move:ytdown-file:%(filepath)s"]));
         assert!(has_pair(&a, ["--print", "before_dl:ytdown-title:%(title)s"]));
         assert!(has_pair(&a, ["--print", "before_dl:ytdown-formats:%(format_id)s"]));
-        assert!(has_pair(&a, ["--progress-template", "download:ytdown:%(progress._percent_str)s|%(info.format_id)s|%(info.vcodec)s"]));
+        assert!(has_pair(&a, ["--progress-template", "download:ytdown:%(progress._percent_str)s|%(info.format_id)s|%(info.vcodec)s|%(progress.fragment_index)s|%(progress.fragment_count)s"]));
         assert!(has_pair(&a, ["-P", "home:/dl"]));
         assert!(has_pair(&a, ["-P", "temp:/tmp/1"]));
         assert_eq!(&a[a.len() - 2..], ["--", "https://youtu.be/x"]);

@@ -32,6 +32,13 @@ impl Manager {
     }
 }
 
+/// Highest percent seen for the current stream; resets when the stream (format_id) changes.
+fn monotonic(max: &mut (String, f32), format_id: &str, percent: f32) -> f32 {
+    if max.0 != format_id { *max = (format_id.to_string(), 0.0); }
+    max.1 = max.1.max(percent);
+    max.1
+}
+
 /// Any download queued or running.
 pub fn has_active_jobs(app: &AppHandle) -> bool {
     app.state::<Manager>().active()
@@ -167,6 +174,7 @@ async fn run(app: &AppHandle, tok: &CancellationToken, ev: &mut Update, a: &[Str
     let (mut out_lines, mut spoke) = (0, false);
     let mut files: Vec<String> = Vec::new();
     let mut formats: Vec<String> = Vec::new();
+    let mut max = (String::new(), 0.0f32);
 
     // drain both pipes concurrently (a full pipe would block yt-dlp), then reap
     let status = loop {
@@ -176,9 +184,9 @@ async fn run(app: &AppHandle, tok: &CancellationToken, ev: &mut Update, a: &[Str
                     out_lines += 1;
                     match progress::parse(&decode(&ob)) {
                         Some(Line::Title(t)) => { ev.title = t; emit(app, ev) }
-                        Some(Line::Formats(f)) => formats = f,
+                        Some(Line::Formats(f)) => { formats = f; max = Default::default() }
                         Some(Line::Progress { percent, format_id, is_video }) => {
-                            ev.percent = percent;
+                            ev.percent = monotonic(&mut max, &format_id, percent);
                             ev.stage = formats.iter().position(|f| *f == format_id).map_or(0, |i| i as u32 + 1);
                             ev.stages = formats.len() as u32;
                             ev.stream = if is_video { "video" } else { "audio" };
@@ -288,6 +296,17 @@ mod tests {
         let p: Vec<_> = futures_util::future::join_all((0..3).map(|_| m.sem.clone().acquire_owned())).await;
         assert_eq!(p.len(), 3);
         assert!(m.sem.clone().try_acquire_owned().is_err());
+    }
+
+    #[test]
+    fn percent_never_decreases_within_stream() {
+        let mut m = (String::new(), 0.0);
+        assert_eq!(monotonic(&mut m, "616", 5.0), 5.0);
+        assert_eq!(monotonic(&mut m, "616", 2.0), 5.0); // backward step held
+        assert_eq!(monotonic(&mut m, "616", 7.0), 7.0);
+        assert_eq!(monotonic(&mut m, "251", 1.0), 1.0); // next stream resets
+        m = Default::default(); // new Formats line (next playlist item)
+        assert_eq!(monotonic(&mut m, "251", 0.5), 0.5);
     }
 
     #[test]
