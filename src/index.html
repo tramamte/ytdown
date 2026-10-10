@@ -25,8 +25,11 @@
   <main>
     <div class="field">
       <label for="url">URL</label>
-      <input id="url" class="url" type="url" placeholder="Paste a YouTube link and press Enter" disabled>
-      <p class="err" hidden></p>
+      <div class="slot">
+        <input id="url" class="url" type="url" placeholder="Paste a YouTube link" disabled>
+        <kbd aria-hidden="true" title="Press Enter">&#9166;</kbd>
+        <p class="err" hidden></p>
+      </div>
       <label class="check"><input id="audio-only" type="checkbox"> Audio Only</label>
     </div>
 
