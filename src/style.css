@@ -1,16 +1,19 @@
 :root {
   --bg: #fff; --fg: #1c1c1e; --muted: #6b6b70; --line: #d6d6db; --card: #f4f4f6;
   --accent: #2563eb; --err: #c62828; --warn: #8a5a00;
-  --info-bg: #e8f0fe; --err-bg: #fdecea; --warn-bg: #fff4e0;
+  --info-bg: #e8f0fe; --err-bg: #fdecea; --warn-bg: #fff4e0; --ok: #2e7d32;
 }
 @media (prefers-color-scheme: dark) {
   :root { --bg: #1c1c1e; --fg: #f2f2f4; --muted: #9a9aa0; --line: #3a3a3f; --card: #2a2a2d;
     --accent: #6ea0ff; --err: #ff8a80; --warn: #ffcc66;
-    --info-bg: #1e2a40; --err-bg: #3a2222; --warn-bg: #3a3020; }
+    --info-bg: #1e2a40; --err-bg: #3a2222; --warn-bg: #3a3020; --ok: #81c784; }
 }
 * { box-sizing: border-box; }
 body { margin: 0; padding: 12px 16px; background: var(--bg); color: var(--fg);
-  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* fixed-height column: only the download list scrolls */
+  height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 header, .list-head, .row { display: flex; align-items: center; gap: 8px; }
 header, .list-head { justify-content: space-between; }
 h1 { font-size: 18px; margin: 0; } h2 { font-size: 14px; margin: 0; }
@@ -43,9 +46,16 @@ button { cursor: pointer; white-space: nowrap; }
 #banner button, #notice button { padding: 2px 8px; background: transparent; border-color: currentColor; color: inherit; }
 [hidden] { display: none !important; }
 .list-head { margin-top: 18px; }
-#list { list-style: none; margin: 8px 0 0; padding: 0; }
+#list { list-style: none; margin: 8px 0 0; padding: 0; flex: 1; min-height: 0; overflow-y: auto; }
 #list li { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; padding: 8px 10px;
   margin-bottom: 6px; background: var(--card); border: 1px solid var(--line); border-radius: 6px; }
+/* per-state colors: active = blue tint, done = green, failed = red, canceled = faded */
+#list li { border-left: 3px solid var(--line); }
+#list li[data-state="running"], #list li[data-state="queued"] { background: var(--info-bg); border-left-color: var(--accent); }
+#list li[data-state="done"] { border-left-color: var(--ok); }
+#list li[data-state="done"] .meta { color: var(--ok); }
+#list li[data-state="error"] { background: var(--err-bg); border-left-color: var(--err); }
+#list li[data-state="canceled"] { opacity: .6; }
 #list .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 #list .meta { color: var(--muted); font-size: 12px; }
 #list progress { grid-column: 1 / -1; width: 100%; height: 8px; }
