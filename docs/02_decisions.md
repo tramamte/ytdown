@@ -42,12 +42,10 @@
 | R33 | 영상 음성 재인코딩은 MP4·MKV 컨테이너만 | AAC는 WebM에 담을 수 없고 "원본"은 WebM일 수 있음 |
 | R34 | 다운로드가 진행·대기 중이면 Update 버튼도 yt-dlp를 즉시 교체하지 않고 다음 실행 시 적용. 교체 도중 비정상 종료로 `.old`만 남으면 시작 시 복구 | onedir yt-dlp는 실행 중에도 `_internal/` 파일을 읽으므로 폴더 교체 시 진행 중 다운로드가 깨질 수 있음 |
 | R35 | 모든 다운로드에 `--ignore-config` 적용 | 사용자의 yt-dlp 설정 파일(`-o`, `-f`, `--abort-on-error` 등)이 앱의 출력 형식·포맷 선택·오류 처리를 바꾸지 못하게 함 |
+| R37 | 영상 없는 재생목록 URL(`/playlist?list=`)은 `PlaylistOnly`로 분류해 여전히 확인 모달을 띄우되 "This video only" 없이 "Whole playlist"/Cancel만 제공. 백엔드는 인자와 무관하게 전체 재생목록으로 처리 | 영상이 없으면 yt-dlp가 `--no-playlist`를 무시해 전체가 받아지므로 의미 없는 선택지 제거. 의도치 않은 대용량 다운로드는 계속 확인. UI를 신뢰하지 않음 |
 
 폐기된 판정: R28(Update 버튼도 다음 실행 시 적용 → PO가 즉시 적용으로 변경), R30(수동 업데이트 중 입력 유지 → 설정 창이 모달이라 불필요, 되돌림).
 
 ## 알려진 한계 (보류)
 
-- 순수 재생목록 URL(`/playlist?list=`)에서 "This video only"를 골라도 전체가 받아짐
-- 999,950~999,999 B는 "1000.0 KB"로 표시
-- 단축키 녹화 시 global-hotkey가 모르는 키(IntlBackslash 등)는 저장할 때 오류로 안내
 - 완료 제목 색(`--faint`)은 WCAG AA 대비 미만(PO 선택)

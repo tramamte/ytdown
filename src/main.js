@@ -18,17 +18,20 @@ $("#playlist-dialog").addEventListener("keydown", (e) => {
   // explicit: don't rely on the WebView's native <dialog> Esc handling
   if (e.key === "Escape") { e.preventDefault(); $("#playlist-dialog").close(""); return; }
   if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-  const opts = [...document.querySelectorAll("#playlist-dialog .opt")];
+  const opts = [...document.querySelectorAll("#playlist-dialog .opt:not([hidden])")];
   const i = opts.indexOf(document.activeElement);
   e.preventDefault();
   opts[(i + (e.key === "ArrowDown" ? 1 : -1) + opts.length) % opts.length].focus();
 });
-function askPlaylist() {
+function askPlaylist(only) {
   const d = $("#playlist-dialog");
+  $("#opt-single").hidden = only;
+  $("#playlist-q").textContent = only ? "This link is a playlist." : "Download just this video, or the whole playlist?";
   return new Promise((resolve) => {
     d.addEventListener("close", () => resolve(d.returnValue || null), { once: true });
     d.returnValue = "";
     d.showModal();
+    if (only) d.querySelector('[value="all"]').focus();
   });
 }
 
@@ -62,10 +65,11 @@ const LABEL = { queued: "Queued", running: "Downloading", done: "Done", error: "
 // decimal units like macOS Finder
 function formatSize(n) {
   if (n < 1000) return `${n} B`;
-  for (const unit of ["KB", "MB", "GB"]) {
-    n /= 1000;
-    if (n < 1000 || unit === "GB") return `${n.toFixed(1)} ${unit}`;
-  }
+  const units = ["KB", "MB", "GB"];
+  let i = 0;
+  n /= 1000;
+  while (i < 2 && n.toFixed(1) >= 1000) { n /= 1000; i++; }  // pick the unit after rounding
+  return `${n.toFixed(1)} ${units[i]}`;
 }
 // running detail: "Video 1/2 · 40%" while merging streams, else "40%"
 function runDetail(u) {
@@ -140,8 +144,8 @@ async function submit(input, audioOnce = false) {
     const k = await invoke("classify_url", { url });
     if (k === "Invalid") return flash(input, "Not a YouTube URL");
     let playlist = false;
-    if (k === "Playlist") {
-      const c = await askPlaylist();
+    if (k === "Playlist" || k === "PlaylistOnly") {
+      const c = await askPlaylist(k === "PlaylistOnly");
       if (!c) return;
       playlist = c === "all";
     }
@@ -185,7 +189,8 @@ function setShortcutField(accel) {
   f.dataset.accel = accel;
   f.value = prettyAccel(accel);
 }
-// e.code names are accepted by the global-hotkey parser; shorten KeyY → Y, Digit1 → 1
+// e.code names the global-hotkey parser (parse_key, v0.8) accepts; shorten KeyY → Y, Digit1 → 1
+const KEY_OK = /^(Key[A-Z]|Digit\d|F([1-9]|1\d|2[0-4])|Numpad(\d|Add|Decimal|Divide|Enter|Equal|Multiply|Subtract)|Arrow(Up|Down|Left|Right)|Backquote|Backslash|Bracket(Left|Right)|Comma|Equal|Minus|Period|Quote|Semicolon|Slash|Pause|Backspace|CapsLock|Enter|Space|Tab|Delete|End|Home|Insert|PageUp|PageDown|PrintScreen|ScrollLock|NumLock|Escape|AudioVolume(Up|Down|Mute)|Media(Play|Pause|PlayPause|Stop|TrackNext|TrackPrevious))$/;
 const keyName = (code) => code.replace(/^Key([A-Z])$/, "$1").replace(/^Digit(\d)$/, "$1");
 const sc = $("#s-shortcut");
 // the live global shortcut is released while recording so its own combo can be captured,
@@ -200,6 +205,7 @@ sc.addEventListener("keydown", (e) => {
   e.preventDefault();
   if (e.key === "Escape") { sc.blur(); return; }     // cancel recording, keep previous
   if (["Shift", "Control", "Alt", "Meta"].includes(e.key)) return;  // wait for the main key
+  if (!KEY_OK.test(e.code)) { sc.value = "Key not supported"; return; }
   const mods = [];
   // platform order: macOS ⌃⌥⇧⌘, others Ctrl+Alt+Shift
   if (!MAC && e.ctrlKey) mods.push("CommandOrControl");

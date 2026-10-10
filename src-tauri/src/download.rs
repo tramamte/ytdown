@@ -206,9 +206,11 @@ pub fn classify_url(url: String) -> UrlKind {
 
 #[tauri::command]
 pub fn start_download(app: AppHandle, state: State<'_, Manager>, url: String, kind: Kind, playlist: bool) -> Result<u64, String> {
-    if classify(&url) == UrlKind::Invalid {
+    let k = classify(&url);
+    if k == UrlKind::Invalid {
         return Err("Invalid YouTube URL".into());
     }
+    let playlist = playlist || k == UrlKind::PlaylistOnly; // no video in the link: --no-playlist would be ignored
     if !deps::ytdlp_path(&app).exists() {
         return Err("Dependencies are not ready".into());
     }
