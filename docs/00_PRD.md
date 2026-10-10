@@ -90,7 +90,7 @@ Tauri v2를 사용한다. 공식 번들러와 CI 액션으로 3개 OS 설치 파
 
 ## 검증 필요 사항
 
-- [ ] macOS(특히 Apple Silicon)용 ffmpeg 신뢰 가능한 배포처 확정 (Windows/Linux는 yt-dlp/FFmpeg-Builds, BtbN 등 후보)
+- [x] macOS(특히 Apple Silicon)용 ffmpeg 신뢰 가능한 배포처 확정: macOS는 osxexperts.net (URL·해시 고정), Windows/Linux는 BtbN/FFmpeg-Builds (GPL 정적 빌드)
 - [ ] 앱이 내려받은 실행 파일에 macOS 격리 속성이 붙어 실행이 차단되는지 확인 (xattr 제거 동작 포함 실기 검증)
 - [ ] yt-dlp의 JS 런타임(Deno 등) 요구 여부를 최신 릴리스 노트로 확인
 - [ ] store 플러그인 저장 경로를 appConfigDir로 지정 시 OS별 실제 경로 확인
