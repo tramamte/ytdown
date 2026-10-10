@@ -214,6 +214,12 @@ sc.addEventListener("keydown", (e) => {
   if (e.shiftKey) mods.push("Shift");
   if (MAC && e.metaKey) mods.push("CommandOrControl");
   if (!mods.some((m) => m !== "Shift")) { sc.value = MAC ? "Include ⌘, ⌃ or ⌥" : "Include Ctrl or Alt"; return; }
+  // a global hotkey steals the combo from every app: refuse ⌘/Ctrl + one key (⌘Q, ⌘C, Ctrl+V …)
+  // and ⌘/Ctrl+Space (Spotlight / input source switching)
+  const solo = mods.length === 1 && (mods[0] === "CommandOrControl" || mods[0] === "Control");
+  if (solo || (e.code === "Space" && mods.every((m) => m !== "Alt" && m !== "Shift"))) {
+    sc.value = "Reserved — add another modifier"; return;
+  }
   setShortcutField([...mods, keyName(e.code)].join("+"));
   sc.blur();
 });
