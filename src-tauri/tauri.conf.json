@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "ytdown",
+        "title": "ytdown by Patrick Yu",
         "width": 560,
         "height": 640,
         "minWidth": 420,
